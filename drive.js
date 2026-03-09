@@ -14,20 +14,14 @@ if (!TOKEN || !DEVICE_ID) {
   process.exit(1);
 }
 
-const SPEED = process.argv[2] || "200";
+const DRIVE_SPEED = process.argv[2] || "120";
+const TURN_SPEED = process.argv[3] || "90";
+const KEEPALIVE_MS = 800;
 
-let currentCommand = "stop";
-let pending = false;
+let currentDirection = "stop";
+let keepaliveInterval = null;
 
-function sendCommand(command) {
-  if (command === currentCommand && command !== "stop") return;
-  if (pending) return;
-
-  currentCommand = command;
-  pending = true;
-
-  const argument = command === "stop" ? command : `${command},${SPEED}`;
-
+function fireCommand(argument) {
   particle
     .callFunction({
       deviceId: DEVICE_ID,
@@ -35,13 +29,32 @@ function sendCommand(command) {
       argument,
       auth: TOKEN,
     })
-    .then(() => {
-      pending = false;
-    })
     .catch((err) => {
       console.error("Error:", err.body || err);
-      pending = false;
     });
+}
+
+function setDirection(direction) {
+  if (direction === currentDirection) return;
+  currentDirection = direction;
+
+  if (direction === "stop") {
+    clearInterval(keepaliveInterval);
+    keepaliveInterval = null;
+    fireCommand("stop");
+    fireCommand("stop");
+    return;
+  }
+
+  const speed = direction === "left" || direction === "right" ? TURN_SPEED : DRIVE_SPEED;
+  const argument = `${direction},${speed}`;
+
+  fireCommand(argument);
+
+  clearInterval(keepaliveInterval);
+  keepaliveInterval = setInterval(() => {
+    fireCommand(argument);
+  }, KEEPALIVE_MS);
 }
 
 const pressed = new Set();
@@ -52,11 +65,11 @@ function updateDirection() {
   const left = pressed.has("left");
   const right = pressed.has("right");
 
-  if (up) sendCommand("forward");
-  else if (down) sendCommand("reverse");
-  else if (left) sendCommand("left");
-  else if (right) sendCommand("right");
-  else sendCommand("stop");
+  if (up) setDirection("forward");
+  else if (down) setDirection("reverse");
+  else if (left) setDirection("left");
+  else if (right) setDirection("right");
+  else setDirection("stop");
 }
 
 process.stdin.setRawMode(true);
@@ -64,21 +77,22 @@ process.stdin.resume();
 process.stdin.setEncoding("utf8");
 
 console.log("Drive mode active! Use arrow keys to control the rover.");
-console.log(`Speed: ${SPEED} (pass a different speed as argument: node drive.js 150)`);
+console.log(`Drive speed: ${DRIVE_SPEED}, Turn speed: ${TURN_SPEED}`);
+console.log("Usage: node drive.js [drive_speed] [turn_speed]");
 console.log("Press q or Ctrl+C to quit.\n");
 
+let stopTimer;
+
 process.stdin.on("data", (key) => {
-  // Ctrl+C or q to quit
   if (key === "\u0003" || key === "q") {
-    sendCommand("stop");
+    setDirection("stop");
     setTimeout(() => {
       console.log("\nStopped.");
       process.exit();
-    }, 300);
+    }, 500);
     return;
   }
 
-  // Arrow keys come as escape sequences: \u001b[A/B/C/D
   if (key === "\u001b[A") {
     pressed.add("up");
     console.log("↑ forward");
@@ -94,14 +108,10 @@ process.stdin.on("data", (key) => {
   }
 
   updateDirection();
-});
 
-// Terminal raw mode doesn't give us keyup events, so auto-stop after a delay
-let stopTimer;
-process.stdin.on("data", () => {
   clearTimeout(stopTimer);
   stopTimer = setTimeout(() => {
     pressed.clear();
     updateDirection();
-  }, 200);
+  }, 300);
 });

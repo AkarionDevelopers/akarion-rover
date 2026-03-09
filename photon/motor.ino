@@ -8,6 +8,10 @@ int enb = A5;
 int in3 = D2;
 int in4 = D3;
 
+unsigned long lastCommandTime = 0;
+const unsigned long SAFETY_TIMEOUT = 2000;
+bool motorsRunning = false;
+
 void setup() {
     pinMode(ena, OUTPUT);
     pinMode(in1, OUTPUT);
@@ -20,6 +24,15 @@ void setup() {
 }
 
 void loop() {
+    if (motorsRunning && millis() - lastCommandTime > SAFETY_TIMEOUT) {
+        stopMotors();
+        motorsRunning = false;
+    }
+}
+
+void stopMotors() {
+    analogWrite(ena, 0);
+    analogWrite(enb, 0);
 }
 
 void setMotor(int enPin, int fwdPin, int revPin, String action, int speed) {
@@ -39,6 +52,8 @@ void setMotor(int enPin, int fwdPin, int revPin, String action, int speed) {
 // Commands: "forward", "reverse", "stop", "left", "right"
 // Optionally with speed: "forward,200"
 int motorControl(String command) {
+    lastCommandTime = millis();
+
     int commaIndex = command.indexOf(',');
     String action = command;
     int speed = 150;
@@ -52,26 +67,30 @@ int motorControl(String command) {
     if (action == "forward") {
         setMotor(ena, in1, in2, "forward", speed);
         setMotor(enb, in3, in4, "forward", speed);
+        motorsRunning = true;
         return speed;
     }
     if (action == "reverse") {
         setMotor(ena, in1, in2, "reverse", speed);
         setMotor(enb, in3, in4, "reverse", speed);
+        motorsRunning = true;
         return speed;
     }
     if (action == "left") {
         setMotor(ena, in1, in2, "reverse", speed);
         setMotor(enb, in3, in4, "forward", speed);
+        motorsRunning = true;
         return speed;
     }
     if (action == "right") {
         setMotor(ena, in1, in2, "forward", speed);
         setMotor(enb, in3, in4, "reverse", speed);
+        motorsRunning = true;
         return speed;
     }
     if (action == "stop") {
-        setMotor(ena, in1, in2, "stop", 0);
-        setMotor(enb, in3, in4, "stop", 0);
+        stopMotors();
+        motorsRunning = false;
         return 0;
     }
     return -1;
