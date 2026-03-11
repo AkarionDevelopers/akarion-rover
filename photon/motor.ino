@@ -1,12 +1,12 @@
 // Motor 1 (Left)
-int ena = A4;
-int in1 = D0;
-int in2 = D1;
+int ena = A5;
+int in1 = D3;
+int in2 = D2;
 
 // Motor 2 (Right)
-int enb = A5;
-int in3 = D2;
-int in4 = D3;
+int enb = A4;
+int in3 = D1;
+int in4 = D0;
 
 unsigned long lastCommandTime = 0;
 const unsigned long SAFETY_TIMEOUT = 2000;
@@ -14,7 +14,7 @@ bool motorsRunning = false;
 
 unsigned long turnStopTime = 0;
 bool turnPending = false;
-const unsigned long TURN_DURATION = 150;
+const unsigned long TURN_DURATION = 200;
 
 void setup() {
     pinMode(ena, OUTPUT);
