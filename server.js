@@ -26,6 +26,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 let currentController = null;
+let currentRover = null;
 
 function fireCommand(argument) {
   particle
@@ -40,22 +41,25 @@ function fireCommand(argument) {
     });
 }
 
+function send(ws, msg) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify(msg));
+  }
+}
+
+function getPeer(ws) {
+  if (ws === currentController) return currentRover;
+  if (ws === currentRover) return currentController;
+  return null;
+}
+
 const VALID_ACTIONS = new Set(["forward", "reverse", "left", "right", "stop"]);
+const SIGNALING_TYPES = new Set(["offer", "answer", "ice-candidate"]);
 
 wss.on("connection", (ws) => {
-  if (currentController) {
-    ws.send(JSON.stringify({ type: "busy" }));
-    ws.close();
-    return;
-  }
-
-  currentController = ws;
-  ws.send(JSON.stringify({ type: "claimed" }));
-  console.log("Controller connected");
+  let role = null;
 
   ws.on("message", (data) => {
-    if (ws !== currentController) return;
-
     let msg;
     try {
       msg = JSON.parse(data);
@@ -63,14 +67,61 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (msg.type !== "command") return;
+    // First message must identify role
+    if (!role) {
+      if (msg.type !== "join" || !msg.role) return;
 
-    const { action, speed } = msg;
-    if (!VALID_ACTIONS.has(action)) return;
+      if (msg.role === "controller") {
+        if (currentController) {
+          send(ws, { type: "busy" });
+          ws.close();
+          return;
+        }
+        role = "controller";
+        currentController = ws;
+        send(ws, { type: "claimed", roverOnline: currentRover !== null });
+        console.log("Controller connected");
 
-    const argument =
-      action === "stop" ? "stop" : `${action},${speed || 150}`;
-    fireCommand(argument);
+        if (currentRover) {
+          send(currentRover, { type: "peer-joined" });
+        }
+      } else if (msg.role === "rover") {
+        if (currentRover) {
+          send(ws, { type: "busy" });
+          ws.close();
+          return;
+        }
+        role = "rover";
+        currentRover = ws;
+        send(ws, { type: "claimed", controllerOnline: currentController !== null });
+        console.log("Rover tablet connected");
+
+        if (currentController) {
+          send(currentController, { type: "rover-online" });
+          send(currentRover, { type: "peer-joined" });
+        }
+      } else {
+        ws.close();
+      }
+      return;
+    }
+
+    // Motor commands (controller only)
+    if (msg.type === "command" && role === "controller") {
+      const { action, speed } = msg;
+      if (!VALID_ACTIONS.has(action)) return;
+      const argument =
+        action === "stop" ? "stop" : `${action},${speed || 150}`;
+      fireCommand(argument);
+      return;
+    }
+
+    // WebRTC signaling — relay to peer
+    if (SIGNALING_TYPES.has(msg.type)) {
+      const peer = getPeer(ws);
+      if (peer) send(peer, msg);
+      return;
+    }
   });
 
   ws.on("close", () => {
@@ -79,6 +130,11 @@ wss.on("connection", (ws) => {
       fireCommand("stop");
       fireCommand("stop");
       console.log("Controller disconnected, rover stopped");
+      send(currentRover, { type: "peer-left" });
+    } else if (ws === currentRover) {
+      currentRover = null;
+      console.log("Rover tablet disconnected");
+      send(currentController, { type: "rover-offline" });
     }
   });
 
@@ -87,7 +143,10 @@ wss.on("connection", (ws) => {
       currentController = null;
       fireCommand("stop");
       fireCommand("stop");
-      console.log("Controller error, rover stopped");
+      send(currentRover, { type: "peer-left" });
+    } else if (ws === currentRover) {
+      currentRover = null;
+      send(currentController, { type: "rover-offline" });
     }
   });
 });

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Morty Rover — Tablet</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #000;
+      color: #eee;
+      height: 100dvh;
+      overflow: hidden;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    /* Full-screen remote video (controller's face) */
+    #remote-video {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 0;
+    }
+
+    /* Placeholder when no driver */
+    .placeholder {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      z-index: 1;
+      background: #1a1a2e;
+      transition: opacity 0.3s;
+    }
+    .placeholder.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .placeholder h1 { color: #e94560; font-size: 1.8rem; }
+    .placeholder p { color: #888; font-size: 1rem; }
+    .placeholder .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid #333;
+      border-top-color: #4ecca3;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Self-view (rover camera preview) */
+    #self-video {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      width: 120px;
+      height: 90px;
+      border-radius: 10px;
+      object-fit: cover;
+      border: 2px solid rgba(255,255,255,0.2);
+      z-index: 10;
+    }
+
+    /* Status bar */
+    .status-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 10px 16px;
+      background: linear-gradient(rgba(0,0,0,0.7), transparent);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 10;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #888;
+      flex-shrink: 0;
+    }
+    .status-dot.online { background: #4ecca3; }
+    .status-dot.waiting { background: #e9a045; animation: pulse 1.5s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .status-text {
+      font-size: 0.85rem;
+      color: #ccc;
+    }
+
+    .status-label {
+      margin-left: auto;
+      font-size: 0.75rem;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="placeholder" id="placeholder">
+    <h1>Morty Rover</h1>
+    <div class="spinner"></div>
+    <p id="placeholder-text">Waiting for a driver...</p>
+  </div>
+
+  <video id="remote-video" autoplay playsinline></video>
+  <video id="self-video" autoplay playsinline muted></video>
+
+  <div class="status-bar">
+    <div class="status-dot waiting" id="status-dot"></div>
+    <span class="status-text" id="status-text">Connecting...</span>
+    <span class="status-label">Morty Rover</span>
+  </div>
+
+  <script>
+    const remoteVideo = document.getElementById('remote-video');
+    const selfVideo = document.getElementById('self-video');
+    const placeholder = document.getElementById('placeholder');
+    const placeholderText = document.getElementById('placeholder-text');
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+
+    let ws = null;
+    let pc = null;
+    let localStream = null;
+    let reconnectTimer = null;
+    let wakeLock = null;
+
+    const RTC_CONFIG = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    };
+
+    // --- Wake Lock (keep screen on) ---
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch {}
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') requestWakeLock();
+    });
+
+    // --- Camera ---
+    async function startCamera() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        selfVideo.srcObject = localStream;
+      } catch (err) {
+        console.warn('Camera not available:', err);
+      }
+    }
+
+    // --- WebRTC ---
+    async function createOffer() {
+      closePeerConnection();
+
+      pc = new RTCPeerConnection(RTC_CONFIG);
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      }
+
+      pc.ontrack = (e) => {
+        remoteVideo.srcObject = e.streams[0];
+        placeholder.classList.add('hidden');
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          wsSend({ type: 'ice-candidate', candidate: e.candidate });
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      wsSend({ type: 'offer', sdp: offer.sdp });
+    }
+
+    function closePeerConnection() {
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      remoteVideo.srcObject = null;
+      placeholder.classList.remove('hidden');
+    }
+
+    async function handleAnswer(answer) {
+      if (!pc) return;
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answer.sdp }));
+    }
+
+    async function handleIceCandidate(candidate) {
+      if (!pc) return;
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+
+    // --- Status helpers ---
+    function setStatus(text, state) {
+      statusText.textContent = text;
+      statusDot.className = 'status-dot ' + (state || '');
+    }
+
+    // --- WebSocket ---
+    function wsSend(msg) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    }
+
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}`);
+
+      ws.onopen = () => {
+        clearTimeout(reconnectTimer);
+        wsSend({ type: 'join', role: 'rover' });
+      };
+
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+
+        if (msg.type === 'claimed') {
+          setStatus(msg.controllerOnline ? 'Driver connected' : 'Waiting for driver...', msg.controllerOnline ? 'online' : 'waiting');
+          placeholderText.textContent = msg.controllerOnline ? 'Driver connected' : 'Waiting for a driver...';
+          startCamera();
+          requestWakeLock();
+
+          if (msg.controllerOnline) {
+            setTimeout(() => createOffer(), 500);
+          }
+        }
+
+        if (msg.type === 'busy') {
+          setStatus('Another rover tablet is connected', '');
+          placeholderText.textContent = 'Another rover tablet is already connected.';
+        }
+
+        if (msg.type === 'peer-joined') {
+          setStatus('Driver connected', 'online');
+          createOffer();
+        }
+
+        if (msg.type === 'peer-left') {
+          setStatus('Driver disconnected — waiting...', 'waiting');
+          placeholderText.textContent = 'Waiting for a driver...';
+          closePeerConnection();
+        }
+
+        // WebRTC signaling
+        if (msg.type === 'answer') handleAnswer(msg);
+        if (msg.type === 'ice-candidate') handleIceCandidate(msg.candidate);
+      };
+
+      ws.onclose = () => {
+        closePeerConnection();
+        setStatus('Disconnected — reconnecting...', '');
+        placeholderText.textContent = 'Connection lost. Reconnecting...';
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    connect();
+  </script>
+</body>
+</html>

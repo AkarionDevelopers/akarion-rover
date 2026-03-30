@@ -1,0 +1,1 @@
+In order to make this nicely usable for everybody there should be a website from which you can control the rover. You should provide a name and MUST have a camera stream of yourself selected. This 

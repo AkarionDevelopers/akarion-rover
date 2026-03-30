@@ -15,21 +15,21 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
       overflow: hidden;
       -webkit-user-select: none;
       user-select: none;
     }
 
     h1 {
-      font-size: 1.6rem;
-      margin-bottom: 0.3rem;
+      font-size: 1.4rem;
+      margin-top: 0.8rem;
+      margin-bottom: 0.2rem;
       color: #e94560;
     }
 
     .status {
-      font-size: 0.85rem;
-      margin-bottom: 1.5rem;
+      font-size: 0.8rem;
+      margin-bottom: 0.8rem;
       color: #888;
     }
     .status.connected { color: #4ecca3; }
@@ -59,6 +59,45 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Video area */
+    .video-container {
+      position: relative;
+      width: min(100%, 480px);
+      aspect-ratio: 4/3;
+      background: #111;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 0.8rem;
+    }
+
+    #remote-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .video-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #555;
+      font-size: 0.9rem;
+    }
+
+    #self-video {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      width: 80px;
+      height: 60px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 2px solid #333;
+      z-index: 2;
+    }
+
     /* D-pad */
     .dpad {
       display: grid;
@@ -66,18 +105,18 @@
         ". up ."
         "left . right"
         ". down .";
-      gap: 8px;
-      margin-bottom: 1.5rem;
+      gap: 6px;
+      margin-bottom: 0.8rem;
     }
 
     .dpad button {
-      width: 72px;
-      height: 72px;
+      width: 64px;
+      height: 64px;
       border: 2px solid #333;
       border-radius: 14px;
       background: #16213e;
       color: #eee;
-      font-size: 1.8rem;
+      font-size: 1.6rem;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -100,24 +139,23 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-bottom: 1rem;
+      margin-bottom: 0.5rem;
     }
-    .speed-control label { font-size: 0.85rem; color: #888; }
+    .speed-control label { font-size: 0.8rem; color: #888; }
     .speed-control input[type="range"] {
-      width: 180px;
+      width: 160px;
       accent-color: #e94560;
     }
     .speed-control .speed-val {
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       color: #4ecca3;
       min-width: 2ch;
       text-align: right;
     }
 
     .hint {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: #555;
-      margin-top: 0.5rem;
     }
   </style>
 </head>
@@ -131,6 +169,12 @@
 
   <h1>Morty Rover</h1>
   <div class="status" id="status">Connecting...</div>
+
+  <div class="video-container">
+    <div class="video-placeholder" id="video-placeholder">Rover camera offline</div>
+    <video id="remote-video" autoplay playsinline></video>
+    <video id="self-video" autoplay playsinline muted></video>
+  </div>
 
   <div class="dpad">
     <button class="btn-up" data-dir="forward">&#9650;</button>
@@ -153,10 +197,15 @@
     const speedSlider = document.getElementById('speed');
     const speedVal = document.getElementById('speed-val');
     const buttons = document.querySelectorAll('.dpad button');
+    const remoteVideo = document.getElementById('remote-video');
+    const selfVideo = document.getElementById('self-video');
+    const videoPlaceholder = document.getElementById('video-placeholder');
 
     let ws = null;
     let claimed = false;
     let reconnectTimer = null;
+    let pc = null;
+    let localStream = null;
 
     const pressed = new Set();
     let currentDirection = 'stop';
@@ -165,9 +214,87 @@
     const KEEPALIVE_MS = 800;
     const TURN_REPEAT_MS = 400;
 
+    const RTC_CONFIG = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    };
+
     speedSlider.addEventListener('input', () => {
       speedVal.textContent = speedSlider.value;
     });
+
+    // --- Camera ---
+    async function startCamera() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+        selfVideo.srcObject = localStream;
+      } catch (err) {
+        console.warn('Camera not available:', err);
+      }
+    }
+
+    // --- WebRTC ---
+    function createPeerConnection() {
+      closePeerConnection();
+
+      pc = new RTCPeerConnection(RTC_CONFIG);
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      }
+
+      pc.ontrack = (e) => {
+        remoteVideo.srcObject = e.streams[0];
+        videoPlaceholder.style.display = 'none';
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          wsSend({ type: 'ice-candidate', candidate: e.candidate });
+        }
+      };
+
+      return pc;
+    }
+
+    function closePeerConnection() {
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      remoteVideo.srcObject = null;
+      videoPlaceholder.style.display = 'flex';
+    }
+
+    async function handleOffer(offer) {
+      createPeerConnection();
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      wsSend({ type: 'answer', sdp: answer.sdp });
+    }
+
+    async function handleAnswer(answer) {
+      if (!pc) return;
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answer.sdp }));
+    }
+
+    async function handleIceCandidate(candidate) {
+      if (!pc) return;
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+
+    // --- WebSocket ---
+    function wsSend(msg) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    }
 
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -175,6 +302,7 @@
 
       ws.onopen = () => {
         clearTimeout(reconnectTimer);
+        wsSend({ type: 'join', role: 'controller' });
       };
 
       ws.onmessage = (e) => {
@@ -183,8 +311,11 @@
         if (msg.type === 'claimed') {
           claimed = true;
           busyScreen.classList.remove('active');
-          statusEl.textContent = 'Connected — you have control';
+          statusEl.textContent = msg.roverOnline
+            ? 'Connected — rover online'
+            : 'Connected — waiting for rover';
           statusEl.className = 'status connected';
+          startCamera();
         }
 
         if (msg.type === 'busy') {
@@ -193,35 +324,48 @@
           statusEl.textContent = 'Rover is busy';
           statusEl.className = 'status busy';
         }
+
+        if (msg.type === 'rover-online') {
+          statusEl.textContent = 'Connected — rover online';
+        }
+
+        if (msg.type === 'rover-offline') {
+          statusEl.textContent = 'Connected — rover camera offline';
+          closePeerConnection();
+        }
+
+        // WebRTC signaling
+        if (msg.type === 'offer') handleOffer(msg);
+        if (msg.type === 'answer') handleAnswer(msg);
+        if (msg.type === 'ice-candidate') handleIceCandidate(msg.candidate);
+
+        if (msg.type === 'peer-left') {
+          closePeerConnection();
+        }
       };
 
       ws.onclose = () => {
         claimed = false;
         pressed.clear();
         setDirection('stop');
+        closePeerConnection();
         statusEl.textContent = 'Disconnected — reconnecting...';
         statusEl.className = 'status';
         reconnectTimer = setTimeout(connect, 2000);
       };
 
-      ws.onerror = () => {
-        ws.close();
-      };
+      ws.onerror = () => ws.close();
     }
 
+    // --- Motor commands ---
     function sendCommand(action) {
-      if (!ws || ws.readyState !== WebSocket.OPEN || !claimed) return;
-      ws.send(JSON.stringify({
-        type: 'command',
-        action,
-        speed: parseInt(speedSlider.value),
-      }));
+      if (!claimed) return;
+      wsSend({ type: 'command', action, speed: parseInt(speedSlider.value) });
     }
 
     function setDirection(dir) {
       if (dir === currentDirection) return;
       currentDirection = dir;
-
       buttons.forEach(b => b.classList.remove('active'));
 
       if (dir === 'stop') {
@@ -252,10 +396,8 @@
 
     // Keyboard
     const keyMap = {
-      ArrowUp: 'forward',
-      ArrowDown: 'reverse',
-      ArrowLeft: 'left',
-      ArrowRight: 'right',
+      ArrowUp: 'forward', ArrowDown: 'reverse',
+      ArrowLeft: 'left', ArrowRight: 'right',
     };
 
     document.addEventListener('keydown', (e) => {
@@ -277,17 +419,8 @@
     // Mouse + touch on buttons
     buttons.forEach(btn => {
       const dir = btn.dataset.dir;
-
-      function start(e) {
-        e.preventDefault();
-        pressed.add(dir);
-        updateDirection();
-      }
-      function end(e) {
-        e.preventDefault();
-        pressed.delete(dir);
-        updateDirection();
-      }
+      function start(e) { e.preventDefault(); pressed.add(dir); updateDirection(); }
+      function end(e) { e.preventDefault(); pressed.delete(dir); updateDirection(); }
 
       btn.addEventListener('mousedown', start);
       btn.addEventListener('mouseup', end);
@@ -297,7 +430,6 @@
       btn.addEventListener('touchcancel', end, { passive: false });
     });
 
-    // Stop everything if window loses focus
     window.addEventListener('blur', () => {
       pressed.clear();
       updateDirection();
