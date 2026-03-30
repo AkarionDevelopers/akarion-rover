@@ -201,6 +201,21 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Viewer requests a fresh WebRTC connection
+    if (msg.type === "retry-video" && role === "viewer") {
+      if (currentRover) {
+        send(currentRover, { type: "peer-left", peerId: id });
+        setTimeout(() => {
+          send(currentRover, {
+            type: "peer-joined",
+            peerId: id,
+            isController: id === controllerId,
+          });
+        }, 500);
+      }
+      return;
+    }
+
     // Signaling from viewer -> rover (add peerId)
     if (SIGNALING_TYPES.has(msg.type) && role === "viewer") {
       if (currentRover) {

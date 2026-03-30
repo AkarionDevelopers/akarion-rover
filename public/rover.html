@@ -281,6 +281,9 @@
     }
 
     // --- WebRTC (multi-peer) ---
+    const RETRY_DELAY = 3000;
+    const CONNECTION_TIMEOUT = 15000;
+
     async function createPeerOffer(peerId, isController) {
       closePeer(peerId);
 
@@ -290,7 +293,7 @@
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
       }
 
-      const peerData = { pc, stream: null };
+      const peerData = { pc, stream: null, iceCandidateQueue: [], remoteDescSet: false, retryCount: 0, isController, timeoutId: null };
       peers.set(peerId, peerData);
 
       pc.ontrack = (e) => {
@@ -306,20 +309,77 @@
         }
       };
 
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        console.log(`Peer ${peerId} ICE: ${state}`);
+        if (state === 'failed') {
+          retryPeer(peerId);
+        } else if (state === 'disconnected') {
+          // Give it a moment to recover before retrying
+          setTimeout(() => {
+            const p = peers.get(peerId);
+            if (p && p.pc.iceConnectionState === 'disconnected') {
+              retryPeer(peerId);
+            }
+          }, 5000);
+        }
+      };
+
       if (isController) {
         currentControllerId = peerId;
       }
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      wsSend({ type: 'offer', sdp: offer.sdp, peerId });
+      // Timeout: if no connection established, retry
+      peerData.timeoutId = setTimeout(() => {
+        const p = peers.get(peerId);
+        if (p && !p.stream) {
+          console.warn(`Peer ${peerId} connection timed out, retrying`);
+          retryPeer(peerId);
+        }
+      }, CONNECTION_TIMEOUT);
+
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        wsSend({ type: 'offer', sdp: offer.sdp, peerId });
+      } catch (err) {
+        console.error(`Failed to create offer for ${peerId}:`, err);
+        setTimeout(() => retryPeer(peerId), RETRY_DELAY);
+      }
 
       updateViewerCount();
+    }
+
+    function retryPeer(peerId) {
+      const peer = peers.get(peerId);
+      if (!peer) return;
+      const wasController = peer.isController;
+      const retryCount = peer.retryCount + 1;
+      if (retryCount > 5) {
+        console.error(`Giving up on peer ${peerId} after 5 retries`);
+        closePeer(peerId);
+        return;
+      }
+      console.log(`Retrying peer ${peerId} (attempt ${retryCount})`);
+      closePeer(peerId);
+      setTimeout(() => {
+        // Only retry if the peer hasn't been re-added by the server
+        if (!peers.has(peerId)) {
+          createPeerOffer(peerId, wasController).then(() => {
+            const p = peers.get(peerId);
+            if (p) p.retryCount = retryCount;
+          });
+        }
+      }, RETRY_DELAY);
     }
 
     function closePeer(peerId) {
       const peer = peers.get(peerId);
       if (peer) {
+        clearTimeout(peer.timeoutId);
+        peer.pc.oniceconnectionstatechange = null;
+        peer.pc.ontrack = null;
+        peer.pc.onicecandidate = null;
         peer.pc.close();
         peers.delete(peerId);
       }
@@ -343,13 +403,32 @@
     async function handleAnswer(peerId, sdp) {
       const peer = peers.get(peerId);
       if (!peer) return;
-      await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+      try {
+        await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+        peer.remoteDescSet = true;
+        // Flush queued ICE candidates
+        for (const candidate of peer.iceCandidateQueue) {
+          await peer.pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+        }
+        peer.iceCandidateQueue = [];
+      } catch (err) {
+        console.error(`Failed to set answer for ${peerId}:`, err);
+        retryPeer(peerId);
+      }
     }
 
     async function handleIceCandidate(peerId, candidate) {
       const peer = peers.get(peerId);
       if (!peer) return;
-      await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+      if (!peer.remoteDescSet) {
+        peer.iceCandidateQueue.push(candidate);
+        return;
+      }
+      try {
+        await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn(`ICE candidate error for ${peerId}:`, err);
+      }
     }
 
     function updateViewerCount() {
