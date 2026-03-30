@@ -107,12 +107,28 @@ setInterval(() => {
   }
 }, 10000);
 
+// WebSocket keepalive — ping all clients every 30s to prevent
+// reverse proxies (Render, Cloudflare, etc.) from killing idle connections
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
 const VALID_ACTIONS = new Set(["forward", "reverse", "left", "right", "stop"]);
 const SIGNALING_TYPES = new Set(["offer", "answer", "ice-candidate"]);
 
 wss.on("connection", (ws) => {
   const id = String(nextId++);
   let role = null; // "rover" | "viewer"
+
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
 
   ws.on("message", (data) => {
     let msg;
