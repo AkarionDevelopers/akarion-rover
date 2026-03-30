@@ -101,7 +101,7 @@
       color: #ccc;
     }
 
-    .status-label {
+    .viewer-count {
       margin-left: auto;
       font-size: 0.75rem;
       color: #666;
@@ -121,7 +121,7 @@
   <div class="status-bar">
     <div class="status-dot waiting" id="status-dot"></div>
     <span class="status-text" id="status-text">Connecting...</span>
-    <span class="status-label">Morty Rover</span>
+    <span class="viewer-count" id="viewer-count"></span>
   </div>
 
   <script>
@@ -131,12 +131,16 @@
     const placeholderText = document.getElementById('placeholder-text');
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
+    const viewerCountEl = document.getElementById('viewer-count');
 
     let ws = null;
-    let pc = null;
     let localStream = null;
     let reconnectTimer = null;
     let wakeLock = null;
+
+    // Multiple peer connections, keyed by peerId
+    const peers = new Map(); // peerId -> { pc, stream }
+    let currentControllerId = null;
 
     const RTC_CONFIG = {
       iceServers: [
@@ -160,6 +164,7 @@
 
     // --- Camera ---
     async function startCamera() {
+      if (localStream) return;
       try {
         localStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -171,49 +176,81 @@
       }
     }
 
-    // --- WebRTC ---
-    async function createOffer() {
-      closePeerConnection();
+    // --- WebRTC (multi-peer) ---
+    async function createPeerOffer(peerId, isController) {
+      closePeer(peerId);
 
-      pc = new RTCPeerConnection(RTC_CONFIG);
+      const pc = new RTCPeerConnection(RTC_CONFIG);
 
       if (localStream) {
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
       }
 
+      const peerData = { pc, stream: null };
+      peers.set(peerId, peerData);
+
       pc.ontrack = (e) => {
-        remoteVideo.srcObject = e.streams[0];
-        placeholder.classList.add('hidden');
+        peerData.stream = e.streams[0];
+        if (peerId === currentControllerId) {
+          showControllerVideo();
+        }
       };
 
       pc.onicecandidate = (e) => {
         if (e.candidate) {
-          wsSend({ type: 'ice-candidate', candidate: e.candidate });
+          wsSend({ type: 'ice-candidate', candidate: e.candidate, peerId });
         }
       };
 
+      if (isController) {
+        currentControllerId = peerId;
+      }
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      wsSend({ type: 'offer', sdp: offer.sdp });
+      wsSend({ type: 'offer', sdp: offer.sdp, peerId });
+
+      updateViewerCount();
     }
 
-    function closePeerConnection() {
-      if (pc) {
-        pc.close();
-        pc = null;
+    function closePeer(peerId) {
+      const peer = peers.get(peerId);
+      if (peer) {
+        peer.pc.close();
+        peers.delete(peerId);
       }
-      remoteVideo.srcObject = null;
-      placeholder.classList.remove('hidden');
+      if (peerId === currentControllerId) {
+        currentControllerId = null;
+        remoteVideo.srcObject = null;
+        placeholder.classList.remove('hidden');
+      }
+      updateViewerCount();
     }
 
-    async function handleAnswer(answer) {
-      if (!pc) return;
-      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answer.sdp }));
+    function showControllerVideo() {
+      if (!currentControllerId) return;
+      const peer = peers.get(currentControllerId);
+      if (peer && peer.stream) {
+        remoteVideo.srcObject = peer.stream;
+        placeholder.classList.add('hidden');
+      }
     }
 
-    async function handleIceCandidate(candidate) {
-      if (!pc) return;
-      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    async function handleAnswer(peerId, sdp) {
+      const peer = peers.get(peerId);
+      if (!peer) return;
+      await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+    }
+
+    async function handleIceCandidate(peerId, candidate) {
+      const peer = peers.get(peerId);
+      if (!peer) return;
+      await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+
+    function updateViewerCount() {
+      const count = peers.size;
+      viewerCountEl.textContent = count > 0 ? `${count} viewer${count !== 1 ? 's' : ''}` : '';
     }
 
     // --- Status helpers ---
@@ -242,14 +279,10 @@
         const msg = JSON.parse(e.data);
 
         if (msg.type === 'claimed') {
-          setStatus(msg.controllerOnline ? 'Driver connected' : 'Waiting for driver...', msg.controllerOnline ? 'online' : 'waiting');
-          placeholderText.textContent = msg.controllerOnline ? 'Driver connected' : 'Waiting for a driver...';
+          setStatus('Waiting for viewers...', 'waiting');
+          placeholderText.textContent = 'Waiting for a driver...';
           startCamera();
           requestWakeLock();
-
-          if (msg.controllerOnline) {
-            setTimeout(() => createOffer(), 500);
-          }
         }
 
         if (msg.type === 'busy') {
@@ -258,25 +291,36 @@
         }
 
         if (msg.type === 'peer-joined') {
-          setStatus('Driver connected', 'online');
-          createOffer();
+          setStatus(msg.isController ? 'Driver connected' : 'Viewer connected', 'online');
+          createPeerOffer(msg.peerId, msg.isController);
         }
 
         if (msg.type === 'peer-left') {
-          setStatus('Driver disconnected — waiting...', 'waiting');
-          placeholderText.textContent = 'Waiting for a driver...';
-          closePeerConnection();
+          closePeer(msg.peerId);
+          if (peers.size === 0) {
+            setStatus('Waiting for viewers...', 'waiting');
+            placeholderText.textContent = 'Waiting for a driver...';
+          }
         }
 
-        // WebRTC signaling
-        if (msg.type === 'answer') handleAnswer(msg);
-        if (msg.type === 'ice-candidate') handleIceCandidate(msg.candidate);
+        if (msg.type === 'controller-changed') {
+          currentControllerId = msg.peerId;
+          showControllerVideo();
+          setStatus('Driver changed', 'online');
+        }
+
+        // WebRTC signaling (with peerId)
+        if (msg.type === 'answer') handleAnswer(msg.peerId, msg.sdp);
+        if (msg.type === 'ice-candidate') handleIceCandidate(msg.peerId, msg.candidate);
       };
 
       ws.onclose = () => {
-        closePeerConnection();
+        // Close all peer connections
+        for (const [peerId] of peers) closePeer(peerId);
+        currentControllerId = null;
         setStatus('Disconnected — reconnecting...', '');
         placeholderText.textContent = 'Connection lost. Reconnecting...';
+        placeholder.classList.remove('hidden');
         reconnectTimer = setTimeout(connect, 2000);
       };
 

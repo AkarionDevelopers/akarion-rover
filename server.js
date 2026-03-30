@@ -9,6 +9,7 @@ const particle = new Particle();
 const TOKEN = process.env.PARTICLE_TOKEN;
 const DEVICE_ID = process.env.PARTICLE_DEVICE_ID;
 const PORT = process.env.PORT || 3000;
+const IDLE_TIMEOUT = 60000; // 1 minute
 
 if (!TOKEN || !DEVICE_ID) {
   console.error(
@@ -25,8 +26,11 @@ app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] })
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-let currentController = null;
 let currentRover = null;
+let controllerId = null;
+let lastCommandTime = 0;
+const viewers = new Map(); // id -> ws
+let nextId = 1;
 
 function fireCommand(argument) {
   particle
@@ -47,17 +51,57 @@ function send(ws, msg) {
   }
 }
 
-function getPeer(ws) {
-  if (ws === currentController) return currentRover;
-  if (ws === currentRover) return currentController;
-  return null;
+function promoteViewer(newId) {
+  const oldId = controllerId;
+  const oldWs = viewers.get(oldId);
+  const newWs = viewers.get(newId);
+
+  fireCommand("stop");
+  fireCommand("stop");
+
+  controllerId = newId;
+  lastCommandTime = Date.now();
+
+  if (oldWs) send(oldWs, { type: "kicked" });
+  if (newWs) send(newWs, { type: "promoted" });
+  if (currentRover) send(currentRover, { type: "controller-changed", peerId: newId });
+
+  console.log(`Controller changed: ${oldId} -> ${newId}`);
 }
+
+function promoteNextSpectator() {
+  for (const [id] of viewers) {
+    if (id !== controllerId) {
+      promoteViewer(id);
+      return;
+    }
+  }
+}
+
+function isControllerIdle() {
+  return controllerId && Date.now() - lastCommandTime > IDLE_TIMEOUT;
+}
+
+function hasSpectators() {
+  for (const [id] of viewers) {
+    if (id !== controllerId) return true;
+  }
+  return false;
+}
+
+// Periodically check for idle controller with waiting spectators
+setInterval(() => {
+  if (isControllerIdle() && hasSpectators()) {
+    promoteNextSpectator();
+  }
+}, 10000);
 
 const VALID_ACTIONS = new Set(["forward", "reverse", "left", "right", "stop"]);
 const SIGNALING_TYPES = new Set(["offer", "answer", "ice-candidate"]);
 
 wss.on("connection", (ws) => {
-  let role = null;
+  const id = String(nextId++);
+  let role = null; // "rover" | "viewer"
 
   ws.on("message", (data) => {
     let msg;
@@ -67,25 +111,11 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // First message must identify role
+    // First message must be join
     if (!role) {
       if (msg.type !== "join" || !msg.role) return;
 
-      if (msg.role === "controller") {
-        if (currentController) {
-          send(ws, { type: "busy" });
-          ws.close();
-          return;
-        }
-        role = "controller";
-        currentController = ws;
-        send(ws, { type: "claimed", roverOnline: currentRover !== null });
-        console.log("Controller connected");
-
-        if (currentRover) {
-          send(currentRover, { type: "peer-joined" });
-        }
-      } else if (msg.role === "rover") {
+      if (msg.role === "rover") {
         if (currentRover) {
           send(ws, { type: "busy" });
           ws.close();
@@ -93,61 +123,116 @@ wss.on("connection", (ws) => {
         }
         role = "rover";
         currentRover = ws;
-        send(ws, { type: "claimed", controllerOnline: currentController !== null });
+        send(ws, { type: "claimed" });
         console.log("Rover tablet connected");
 
-        if (currentController) {
-          send(currentController, { type: "rover-online" });
-          send(currentRover, { type: "peer-joined" });
+        // Tell rover about all existing viewers
+        for (const [viewerId] of viewers) {
+          send(currentRover, {
+            type: "peer-joined",
+            peerId: viewerId,
+            isController: viewerId === controllerId,
+          });
         }
-      } else {
-        ws.close();
+        return;
       }
+
+      if (msg.role === "controller") {
+        role = "viewer";
+        viewers.set(id, ws);
+
+        if (!controllerId) {
+          controllerId = id;
+          lastCommandTime = Date.now();
+          send(ws, { type: "claimed", roverOnline: currentRover !== null });
+          console.log(`Controller ${id} connected`);
+        } else if (isControllerIdle()) {
+          // Kick idle controller, give control to new viewer
+          const oldWs = viewers.get(controllerId);
+          fireCommand("stop");
+          fireCommand("stop");
+          if (oldWs) send(oldWs, { type: "kicked" });
+          if (currentRover) send(currentRover, { type: "controller-changed", peerId: id });
+          controllerId = id;
+          lastCommandTime = Date.now();
+          send(ws, { type: "claimed", roverOnline: currentRover !== null });
+          console.log(`Controller ${id} took over from idle controller`);
+        } else {
+          send(ws, { type: "watching", roverOnline: currentRover !== null });
+          console.log(`Spectator ${id} connected`);
+        }
+
+        // Tell rover about new peer
+        if (currentRover) {
+          send(currentRover, {
+            type: "peer-joined",
+            peerId: id,
+            isController: id === controllerId,
+          });
+        }
+        return;
+      }
+
+      ws.close();
       return;
     }
 
     // Motor commands (controller only)
-    if (msg.type === "command" && role === "controller") {
-      const { action, speed } = msg;
+    if (msg.type === "command" && role === "viewer" && id === controllerId) {
+      const { action } = msg;
       if (!VALID_ACTIONS.has(action)) return;
-      const argument =
-        action === "stop" ? "stop" : `${action},${speed || 150}`;
+      lastCommandTime = Date.now();
+      const argument = action === "stop" ? "stop" : `${action},150`;
       fireCommand(argument);
       return;
     }
 
-    // WebRTC signaling — relay to peer
-    if (SIGNALING_TYPES.has(msg.type)) {
-      const peer = getPeer(ws);
-      if (peer) send(peer, msg);
+    // Signaling from viewer -> rover (add peerId)
+    if (SIGNALING_TYPES.has(msg.type) && role === "viewer") {
+      if (currentRover) {
+        send(currentRover, { ...msg, peerId: id });
+      }
+      return;
+    }
+
+    // Signaling from rover -> viewer (route by peerId)
+    if (SIGNALING_TYPES.has(msg.type) && role === "rover") {
+      const targetWs = viewers.get(msg.peerId);
+      if (targetWs) {
+        const fwd = { ...msg };
+        delete fwd.peerId;
+        send(targetWs, fwd);
+      }
       return;
     }
   });
 
   ws.on("close", () => {
-    if (ws === currentController) {
-      currentController = null;
-      fireCommand("stop");
-      fireCommand("stop");
-      console.log("Controller disconnected, rover stopped");
-      send(currentRover, { type: "peer-left" });
-    } else if (ws === currentRover) {
+    if (role === "rover") {
       currentRover = null;
       console.log("Rover tablet disconnected");
-      send(currentController, { type: "rover-offline" });
+      for (const [, vws] of viewers) {
+        send(vws, { type: "rover-offline" });
+      }
+    } else if (role === "viewer") {
+      viewers.delete(id);
+      if (currentRover) {
+        send(currentRover, { type: "peer-left", peerId: id });
+      }
+      if (id === controllerId) {
+        controllerId = null;
+        fireCommand("stop");
+        fireCommand("stop");
+        console.log(`Controller ${id} disconnected, rover stopped`);
+        promoteNextSpectator();
+      } else {
+        console.log(`Spectator ${id} disconnected`);
+      }
     }
   });
 
   ws.on("error", () => {
-    if (ws === currentController) {
-      currentController = null;
-      fireCommand("stop");
-      fireCommand("stop");
-      send(currentRover, { type: "peer-left" });
-    } else if (ws === currentRover) {
-      currentRover = null;
-      send(currentController, { type: "rover-offline" });
-    }
+    ws.close();
   });
 });
 
