@@ -207,11 +207,10 @@
     .tap-to-start h2 { color: #e94560; font-size: 1.4rem; }
     .tap-to-start p { color: #888; font-size: 0.9rem; }
 
-    /* Mute button */
-    .mute-btn {
+    /* Overlay icon buttons (mute, fullscreen) */
+    .icon-btn {
       position: fixed;
       bottom: 16px;
-      left: 16px;
       width: 44px;
       height: 44px;
       border-radius: 50%;
@@ -228,10 +227,20 @@
       z-index: 10;
       -webkit-tap-highlight-color: transparent;
     }
-    .mute-btn.hidden { display: none; }
+    .icon-btn.hidden { display: none; }
+
+    /* Mute button */
+    .mute-btn {
+      left: 16px;
+    }
     .mute-btn.muted {
       background: rgba(233,69,96,0.5);
       border-color: rgba(233,69,96,0.7);
+    }
+
+    /* Fullscreen button */
+    .fullscreen-btn {
+      left: 70px;
     }
   </style>
 </head>
@@ -263,7 +272,8 @@
     <span class="viewer-count" id="viewer-count"></span>
   </div>
 
-  <button class="mute-btn hidden muted" id="mute-btn" title="Toggle microphone">&#128263;</button>
+  <button class="icon-btn mute-btn hidden muted" id="mute-btn" title="Toggle microphone">&#128263;</button>
+  <button class="icon-btn fullscreen-btn hidden" id="fullscreen-btn" title="Toggle fullscreen">&#x26F6;</button>
 
   <script>
     const driverVideo = document.getElementById('driver-video');
@@ -278,6 +288,7 @@
     const connectingSpinner = document.getElementById('connecting-spinner');
     const viewerCountEl = document.getElementById('viewer-count');
     const muteBtn = document.getElementById('mute-btn');
+    const fullscreenBtn = document.getElementById('fullscreen-btn');
 
     const tapToStart = document.getElementById('tap-to-start');
 
@@ -327,6 +338,35 @@
       updateMuteUI();
     });
 
+    // --- Fullscreen ---
+    function isFullscreen() {
+      return !!(document.fullscreenElement || document.webkitFullscreenElement);
+    }
+
+    function requestFullscreen() {
+      const el = document.documentElement;
+      if (el.requestFullscreen) el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    }
+
+    function exitFullscreen() {
+      if (document.exitFullscreen) document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+
+    function updateFullscreenBtn() {
+      // ⛶ = enter fullscreen, 🗕 = exit/minimise feel; use a simple toggle icon
+      fullscreenBtn.textContent = isFullscreen() ? '\u{1F5D5}' : '\u26F6';
+    }
+
+    fullscreenBtn.addEventListener('click', () => {
+      if (isFullscreen()) exitFullscreen();
+      else requestFullscreen();
+    });
+
+    document.addEventListener('fullscreenchange', updateFullscreenBtn);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+
     // --- Camera + Audio ---
     async function startCamera() {
       if (localStream) return;
@@ -338,10 +378,12 @@
         selfVideo.srcObject = localStream;
         localStream.getAudioTracks().forEach(t => t.enabled = false);
         muteBtn.classList.remove('hidden');
+        fullscreenBtn.classList.remove('hidden');
         cameraReady = true;
       } catch (err) {
         console.warn('Camera/mic not available:', err);
-        // Still allow connecting even if camera fails
+          // Still allow connecting even if camera fails
+        fullscreenBtn.classList.remove('hidden');
         cameraReady = true;
       }
     }
@@ -350,6 +392,8 @@
     // Start camera on tap, then connect WebSocket.
     tapToStart.addEventListener('click', async () => {
       tapToStart.classList.add('hidden');
+      // Enter fullscreen using the tap gesture (required by browsers)
+      requestFullscreen();
       await startCamera();
       connect();
     });
