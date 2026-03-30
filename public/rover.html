@@ -110,7 +110,7 @@
     /* Viewer list */
     .viewer-list {
       position: fixed;
-      bottom: 16px;
+      bottom: 70px;
       left: 16px;
       background: rgba(0,0,0,0.6);
       backdrop-filter: blur(8px);
@@ -156,6 +156,32 @@
       color: rgba(255,255,255,0.35);
       margin-left: auto;
     }
+    /* Mute button */
+    .mute-btn {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: rgba(255,255,255,0.8);
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 10;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .mute-btn.hidden { display: none; }
+    .mute-btn.muted {
+      background: rgba(233,69,96,0.5);
+      border-color: rgba(233,69,96,0.7);
+    }
   </style>
 </head>
 <body>
@@ -174,6 +200,8 @@
     <span class="viewer-count" id="viewer-count"></span>
   </div>
 
+  <button class="mute-btn hidden muted" id="mute-btn" title="Toggle microphone">&#128263;</button>
+
   <div class="viewer-list hidden" id="viewer-list">
     <div class="viewer-list-title">Viewers</div>
     <ul id="viewer-list-items"></ul>
@@ -188,6 +216,7 @@
     const statusText = document.getElementById('status-text');
     const viewerCountEl = document.getElementById('viewer-count');
 
+    const muteBtn = document.getElementById('mute-btn');
     const viewerListEl = document.getElementById('viewer-list');
     const viewerListItems = document.getElementById('viewer-list-items');
 
@@ -220,17 +249,34 @@
       if (document.visibilityState === 'visible') requestWakeLock();
     });
 
-    // --- Camera ---
+    let isMuted = true;
+
+    function updateMuteUI() {
+      muteBtn.textContent = isMuted ? '\u{1F507}' : '\u{1F50A}';
+      muteBtn.classList.toggle('muted', isMuted);
+      if (localStream) {
+        localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+      }
+    }
+
+    muteBtn.addEventListener('click', () => {
+      isMuted = !isMuted;
+      updateMuteUI();
+    });
+
+    // --- Camera + Audio ---
     async function startCamera() {
       if (localStream) return;
       try {
         localStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
+          audio: true,
         });
         selfVideo.srcObject = localStream;
+        localStream.getAudioTracks().forEach(t => t.enabled = false);
+        muteBtn.classList.remove('hidden');
       } catch (err) {
-        console.warn('Camera not available:', err);
+        console.warn('Camera/mic not available:', err);
       }
     }
 

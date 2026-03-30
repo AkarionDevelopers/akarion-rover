@@ -216,6 +216,33 @@
     .btn-left  { grid-area: left; }
     .btn-right { grid-area: right; }
 
+    /* Mute button */
+    .mute-btn {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: rgba(255,255,255,0.8);
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 10;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .mute-btn.hidden { display: none; }
+    .mute-btn.muted {
+      background: rgba(233,69,96,0.5);
+      border-color: rgba(233,69,96,0.7);
+    }
+
     /* Name + connect screen */
     #connect-screen {
       position: fixed;
@@ -303,6 +330,8 @@
     <div class="subtitle">You'll get control when they're done or idle</div>
   </div>
 
+  <button class="mute-btn hidden muted" id="mute-btn" title="Toggle microphone">&#128263;</button>
+
   <div class="dpad hidden" id="dpad">
     <button class="btn-up" data-dir="forward">&#9650;</button>
     <button class="btn-left" data-dir="left">&#9664;</button>
@@ -322,6 +351,7 @@
     const roleBadge = document.getElementById('role-badge');
     const viewerListEl = document.getElementById('viewer-list');
     const viewerListItems = document.getElementById('viewer-list-items');
+    const muteBtn = document.getElementById('mute-btn');
     const dpad = document.getElementById('dpad');
     const buttons = document.querySelectorAll('.dpad button');
     const remoteVideo = document.getElementById('remote-video');
@@ -415,17 +445,35 @@
       roleBadge.className = 'role-badge spectator';
     }
 
-    // --- Camera ---
+    let isMuted = true;
+
+    function updateMuteUI() {
+      muteBtn.textContent = isMuted ? '\u{1F507}' : '\u{1F50A}';
+      muteBtn.classList.toggle('muted', isMuted);
+      if (localStream) {
+        localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+      }
+    }
+
+    muteBtn.addEventListener('click', () => {
+      isMuted = !isMuted;
+      updateMuteUI();
+    });
+
+    // --- Camera + Audio ---
     async function startCamera() {
       if (localStream) return;
       try {
         localStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false,
+          audio: true,
         });
         selfVideo.srcObject = localStream;
+        // Start muted
+        localStream.getAudioTracks().forEach(t => t.enabled = false);
+        muteBtn.classList.remove('hidden');
       } catch (err) {
-        console.warn('Camera not available:', err);
+        console.warn('Camera/mic not available:', err);
       }
     }
 
