@@ -37,6 +37,20 @@ void loop() {
         stopMotors();
         motorsRunning = false;
     }
+
+    // Check if we lost the cloud connection
+    if (!Particle.connected()) {
+        // If we've been disconnected for more than 30 seconds, 
+        // force a Wi-Fi reset to find the strongest AP
+        static uint32_t lastConnectionAttempt = 0;
+        if (millis() - lastConnectionAttempt > 30000) {
+            WiFi.off();
+            delay(100);
+            WiFi.on();
+            Particle.connect();
+            lastConnectionAttempt = millis();
+        }
+    }
 }
 
 void stopMotors() {

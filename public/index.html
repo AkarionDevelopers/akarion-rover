@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Morty Rover</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      margin-bottom: 0.3rem;
+      color: #e94560;
+    }
+
+    .status {
+      font-size: 0.85rem;
+      margin-bottom: 1.5rem;
+      color: #888;
+    }
+    .status.connected { color: #4ecca3; }
+    .status.busy { color: #e94560; }
+
+    /* Busy overlay */
+    #busy-screen {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #1a1a2e;
+      z-index: 100;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+    }
+    #busy-screen.active { display: flex; }
+    #busy-screen h2 { color: #e94560; font-size: 1.4rem; }
+    #busy-screen p { color: #888; font-size: 0.95rem; }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 4px solid #333;
+      border-top-color: #e94560;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* D-pad */
+    .dpad {
+      display: grid;
+      grid-template-areas:
+        ". up ."
+        "left . right"
+        ". down .";
+      gap: 8px;
+      margin-bottom: 1.5rem;
+    }
+
+    .dpad button {
+      width: 72px;
+      height: 72px;
+      border: 2px solid #333;
+      border-radius: 14px;
+      background: #16213e;
+      color: #eee;
+      font-size: 1.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.1s, border-color 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .dpad button:active, .dpad button.active {
+      background: #e94560;
+      border-color: #e94560;
+    }
+
+    .btn-up    { grid-area: up; }
+    .btn-down  { grid-area: down; }
+    .btn-left  { grid-area: left; }
+    .btn-right { grid-area: right; }
+
+    /* Speed slider */
+    .speed-control {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 1rem;
+    }
+    .speed-control label { font-size: 0.85rem; color: #888; }
+    .speed-control input[type="range"] {
+      width: 180px;
+      accent-color: #e94560;
+    }
+    .speed-control .speed-val {
+      font-size: 0.85rem;
+      color: #4ecca3;
+      min-width: 2ch;
+      text-align: right;
+    }
+
+    .hint {
+      font-size: 0.75rem;
+      color: #555;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div id="busy-screen">
+    <div class="spinner"></div>
+    <h2>Rover is in use</h2>
+    <p>Someone else is currently controlling the rover.</p>
+    <p>Waiting for them to finish...</p>
+  </div>
+
+  <h1>Morty Rover</h1>
+  <div class="status" id="status">Connecting...</div>
+
+  <div class="dpad">
+    <button class="btn-up" data-dir="forward">&#9650;</button>
+    <button class="btn-left" data-dir="left">&#9664;</button>
+    <button class="btn-right" data-dir="right">&#9654;</button>
+    <button class="btn-down" data-dir="reverse">&#9660;</button>
+  </div>
+
+  <div class="speed-control">
+    <label>Speed</label>
+    <input type="range" id="speed" min="50" max="255" value="200">
+    <span class="speed-val" id="speed-val">200</span>
+  </div>
+
+  <p class="hint">Arrow keys or tap the buttons</p>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const busyScreen = document.getElementById('busy-screen');
+    const speedSlider = document.getElementById('speed');
+    const speedVal = document.getElementById('speed-val');
+    const buttons = document.querySelectorAll('.dpad button');
+
+    let ws = null;
+    let claimed = false;
+    let reconnectTimer = null;
+
+    const pressed = new Set();
+    let currentDirection = 'stop';
+    let keepaliveInterval = null;
+
+    const KEEPALIVE_MS = 800;
+    const TURN_REPEAT_MS = 400;
+
+    speedSlider.addEventListener('input', () => {
+      speedVal.textContent = speedSlider.value;
+    });
+
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}`);
+
+      ws.onopen = () => {
+        clearTimeout(reconnectTimer);
+      };
+
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+
+        if (msg.type === 'claimed') {
+          claimed = true;
+          busyScreen.classList.remove('active');
+          statusEl.textContent = 'Connected — you have control';
+          statusEl.className = 'status connected';
+        }
+
+        if (msg.type === 'busy') {
+          claimed = false;
+          busyScreen.classList.add('active');
+          statusEl.textContent = 'Rover is busy';
+          statusEl.className = 'status busy';
+        }
+      };
+
+      ws.onclose = () => {
+        claimed = false;
+        pressed.clear();
+        setDirection('stop');
+        statusEl.textContent = 'Disconnected — reconnecting...';
+        statusEl.className = 'status';
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
+    function sendCommand(action) {
+      if (!ws || ws.readyState !== WebSocket.OPEN || !claimed) return;
+      ws.send(JSON.stringify({
+        type: 'command',
+        action,
+        speed: parseInt(speedSlider.value),
+      }));
+    }
+
+    function setDirection(dir) {
+      if (dir === currentDirection) return;
+      currentDirection = dir;
+
+      buttons.forEach(b => b.classList.remove('active'));
+
+      if (dir === 'stop') {
+        clearInterval(keepaliveInterval);
+        keepaliveInterval = null;
+        sendCommand('stop');
+        return;
+      }
+
+      const activeBtn = document.querySelector(`[data-dir="${dir}"]`);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      const isTurn = dir === 'left' || dir === 'right';
+      const interval = isTurn ? TURN_REPEAT_MS : KEEPALIVE_MS;
+
+      sendCommand(dir);
+      clearInterval(keepaliveInterval);
+      keepaliveInterval = setInterval(() => sendCommand(dir), interval);
+    }
+
+    function updateDirection() {
+      if (pressed.has('forward'))       setDirection('forward');
+      else if (pressed.has('reverse'))  setDirection('reverse');
+      else if (pressed.has('left'))     setDirection('left');
+      else if (pressed.has('right'))    setDirection('right');
+      else                              setDirection('stop');
+    }
+
+    // Keyboard
+    const keyMap = {
+      ArrowUp: 'forward',
+      ArrowDown: 'reverse',
+      ArrowLeft: 'left',
+      ArrowRight: 'right',
+    };
+
+    document.addEventListener('keydown', (e) => {
+      const dir = keyMap[e.key];
+      if (!dir || pressed.has(dir)) return;
+      e.preventDefault();
+      pressed.add(dir);
+      updateDirection();
+    });
+
+    document.addEventListener('keyup', (e) => {
+      const dir = keyMap[e.key];
+      if (!dir) return;
+      e.preventDefault();
+      pressed.delete(dir);
+      updateDirection();
+    });
+
+    // Mouse + touch on buttons
+    buttons.forEach(btn => {
+      const dir = btn.dataset.dir;
+
+      function start(e) {
+        e.preventDefault();
+        pressed.add(dir);
+        updateDirection();
+      }
+      function end(e) {
+        e.preventDefault();
+        pressed.delete(dir);
+        updateDirection();
+      }
+
+      btn.addEventListener('mousedown', start);
+      btn.addEventListener('mouseup', end);
+      btn.addEventListener('mouseleave', end);
+      btn.addEventListener('touchstart', start, { passive: false });
+      btn.addEventListener('touchend', end, { passive: false });
+      btn.addEventListener('touchcancel', end, { passive: false });
+    });
+
+    // Stop everything if window loses focus
+    window.addEventListener('blur', () => {
+      pressed.clear();
+      updateDirection();
+    });
+
+    connect();
+  </script>
+</body>
+</html>

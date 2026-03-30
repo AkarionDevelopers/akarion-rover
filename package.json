@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "start": "node -r dotenv/config server.js",
     "drive": "node -r dotenv/config drive.js",
     "flash": "particle flash 400033000a51353335323536 photon/motor.ino"
   },
@@ -19,6 +20,8 @@
   "description": "",
   "dependencies": {
     "dotenv": "^17.3.1",
-    "particle-api-js": "^12.0.0"
+    "express": "^5.2.1",
+    "particle-api-js": "^12.0.0",
+    "ws": "^8.20.0"
   }
 }
