@@ -17,8 +17,8 @@
       user-select: none;
     }
 
-    /* Full-screen remote video (controller's face) */
-    #remote-video {
+    /* Main driver video (fullscreen) */
+    #driver-video {
       position: fixed;
       inset: 0;
       width: 100%;
@@ -26,6 +26,65 @@
       object-fit: cover;
       z-index: 0;
     }
+
+    /* Spectator video strip */
+    .spectator-strip {
+      position: fixed;
+      top: 40px;
+      right: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 10;
+    }
+
+    .spectator-tile {
+      position: relative;
+      width: 110px;
+      height: 82px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1.5px solid rgba(255,255,255,0.15);
+      background: #111;
+    }
+    .spectator-tile video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .spectator-tile .name-tag {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 2px 6px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.7));
+      font-size: 0.55rem;
+      color: rgba(255,255,255,0.8);
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Driver name overlay */
+    .driver-name {
+      position: fixed;
+      bottom: 70px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 14px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      border: 1px solid rgba(78,204,163,0.3);
+      font-size: 0.75rem;
+      color: #4ecca3;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .driver-name.hidden { display: none; }
 
     /* Placeholder when no driver */
     .placeholder {
@@ -44,15 +103,37 @@
       opacity: 0;
       pointer-events: none;
     }
-    .placeholder h1 { color: #e94560; font-size: 1.8rem; }
     .placeholder p { color: #888; font-size: 1rem; }
-    .placeholder .spinner {
+
+    .sleeping-face {
+      font-size: 6rem;
+      animation: breathe 3s ease-in-out infinite;
+    }
+    @keyframes breathe {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.05); opacity: 1; }
+    }
+    .sleeping-face .zzz {
+      font-size: 2rem;
+      position: absolute;
+      top: -0.5rem;
+      right: -1.5rem;
+      animation: float 2s ease-in-out infinite;
+      opacity: 0.6;
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); opacity: 0.6; }
+      50% { transform: translateY(-12px); opacity: 1; }
+    }
+
+    .spinner {
       width: 48px; height: 48px;
       border: 4px solid #333;
       border-top-color: #4ecca3;
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
+    .spinner.hidden { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Self-view (rover camera preview) */
@@ -107,55 +188,6 @@
       color: #666;
     }
 
-    /* Viewer list */
-    .viewer-list {
-      position: fixed;
-      bottom: 70px;
-      left: 16px;
-      background: rgba(0,0,0,0.6);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 10px;
-      padding: 8px 12px;
-      z-index: 10;
-      min-width: 120px;
-      max-width: 200px;
-    }
-    .viewer-list.hidden { display: none; }
-    .viewer-list-title {
-      font-size: 0.65rem;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: rgba(255,255,255,0.35);
-      margin-bottom: 6px;
-    }
-    .viewer-list ul {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-    }
-    .viewer-list li {
-      font-size: 0.75rem;
-      color: rgba(255,255,255,0.7);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .viewer-list .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .viewer-list .dot.driver { background: #4ecca3; }
-    .viewer-list .dot.spectator { background: #e94560; }
-    .viewer-list .role-tag {
-      font-size: 0.6rem;
-      color: rgba(255,255,255,0.35);
-      margin-left: auto;
-    }
     /* Mute button */
     .mute-btn {
       position: fixed;
@@ -186,12 +218,18 @@
 </head>
 <body>
   <div class="placeholder" id="placeholder">
-    <h1>Morty Rover</h1>
-    <div class="spinner"></div>
-    <p id="placeholder-text">Waiting for a driver...</p>
+    <div class="sleeping-face" id="sleeping-face" style="position:relative;display:inline-block">
+      <span>&#128564;</span>
+      <span class="zzz">&#128164;</span>
+    </div>
+    <div class="spinner hidden" id="connecting-spinner"></div>
+    <p id="placeholder-text"></p>
   </div>
 
-  <video id="remote-video" autoplay playsinline></video>
+  <video id="driver-video" autoplay playsinline></video>
+  <div class="driver-name hidden" id="driver-name"></div>
+  <div class="spectator-strip" id="spectator-strip"></div>
+
   <video id="self-video" autoplay playsinline muted></video>
 
   <div class="status-bar">
@@ -202,23 +240,19 @@
 
   <button class="mute-btn hidden muted" id="mute-btn" title="Toggle microphone">&#128263;</button>
 
-  <div class="viewer-list hidden" id="viewer-list">
-    <div class="viewer-list-title">Viewers</div>
-    <ul id="viewer-list-items"></ul>
-  </div>
-
   <script>
-    const remoteVideo = document.getElementById('remote-video');
+    const driverVideo = document.getElementById('driver-video');
+    const driverNameEl = document.getElementById('driver-name');
+    const spectatorStrip = document.getElementById('spectator-strip');
     const selfVideo = document.getElementById('self-video');
     const placeholder = document.getElementById('placeholder');
     const placeholderText = document.getElementById('placeholder-text');
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
+    const sleepingFace = document.getElementById('sleeping-face');
+    const connectingSpinner = document.getElementById('connecting-spinner');
     const viewerCountEl = document.getElementById('viewer-count');
-
     const muteBtn = document.getElementById('mute-btn');
-    const viewerListEl = document.getElementById('viewer-list');
-    const viewerListItems = document.getElementById('viewer-list-items');
 
     let ws = null;
     let localStream = null;
@@ -226,7 +260,8 @@
     let wakeLock = null;
 
     // Multiple peer connections, keyed by peerId
-    const peers = new Map(); // peerId -> { pc, stream }
+    // { pc, stream, isController, name, videoEl, tileEl, retryCount, iceCandidateQueue, remoteDescSet, timeoutId }
+    const peers = new Map();
     let currentControllerId = null;
 
     const RTC_CONFIG = {
@@ -280,11 +315,51 @@
       }
     }
 
+    // --- Video layout ---
+    function layoutVideos() {
+      // Driver video
+      if (currentControllerId) {
+        const driverPeer = peers.get(currentControllerId);
+        if (driverPeer && driverPeer.stream) {
+          driverVideo.srcObject = driverPeer.stream;
+          driverNameEl.textContent = driverPeer.name || '';
+          driverNameEl.classList.remove('hidden');
+          placeholder.classList.add('hidden');
+        }
+      } else {
+        driverVideo.srcObject = null;
+        driverNameEl.classList.add('hidden');
+      }
+
+      // Spectator tiles
+      spectatorStrip.innerHTML = '';
+      for (const [peerId, peer] of peers) {
+        if (peerId === currentControllerId) continue;
+        if (!peer.stream) continue;
+
+        const tile = document.createElement('div');
+        tile.className = 'spectator-tile';
+
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.playsInline = true;
+        video.srcObject = peer.stream;
+
+        const nameTag = document.createElement('div');
+        nameTag.className = 'name-tag';
+        nameTag.textContent = peer.name || 'Spectator';
+
+        tile.appendChild(video);
+        tile.appendChild(nameTag);
+        spectatorStrip.appendChild(tile);
+      }
+    }
+
     // --- WebRTC (multi-peer) ---
     const RETRY_DELAY = 3000;
     const CONNECTION_TIMEOUT = 15000;
 
-    async function createPeerOffer(peerId, isController) {
+    async function createPeerOffer(peerId, isController, name) {
       closePeer(peerId);
 
       const pc = new RTCPeerConnection(RTC_CONFIG);
@@ -293,14 +368,15 @@
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
       }
 
-      const peerData = { pc, stream: null, iceCandidateQueue: [], remoteDescSet: false, retryCount: 0, isController, timeoutId: null };
+      const peerData = {
+        pc, stream: null, isController, name: name || 'Unknown',
+        iceCandidateQueue: [], remoteDescSet: false, retryCount: 0, timeoutId: null,
+      };
       peers.set(peerId, peerData);
 
       pc.ontrack = (e) => {
         peerData.stream = e.streams[0];
-        if (peerId === currentControllerId) {
-          showControllerVideo();
-        }
+        layoutVideos();
       };
 
       pc.onicecandidate = (e) => {
@@ -315,7 +391,6 @@
         if (state === 'failed') {
           retryPeer(peerId);
         } else if (state === 'disconnected') {
-          // Give it a moment to recover before retrying
           setTimeout(() => {
             const p = peers.get(peerId);
             if (p && p.pc.iceConnectionState === 'disconnected') {
@@ -329,7 +404,6 @@
         currentControllerId = peerId;
       }
 
-      // Timeout: if no connection established, retry
       peerData.timeoutId = setTimeout(() => {
         const p = peers.get(peerId);
         if (p && !p.stream) {
@@ -353,7 +427,7 @@
     function retryPeer(peerId) {
       const peer = peers.get(peerId);
       if (!peer) return;
-      const wasController = peer.isController;
+      const { isController, name } = peer;
       const retryCount = peer.retryCount + 1;
       if (retryCount > 5) {
         console.error(`Giving up on peer ${peerId} after 5 retries`);
@@ -363,9 +437,8 @@
       console.log(`Retrying peer ${peerId} (attempt ${retryCount})`);
       closePeer(peerId);
       setTimeout(() => {
-        // Only retry if the peer hasn't been re-added by the server
         if (!peers.has(peerId)) {
-          createPeerOffer(peerId, wasController).then(() => {
+          createPeerOffer(peerId, isController, name).then(() => {
             const p = peers.get(peerId);
             if (p) p.retryCount = retryCount;
           });
@@ -385,18 +458,14 @@
       }
       if (peerId === currentControllerId) {
         currentControllerId = null;
-        remoteVideo.srcObject = null;
-        placeholder.classList.remove('hidden');
+        driverVideo.srcObject = null;
+        driverNameEl.classList.add('hidden');
       }
+      layoutVideos();
       updateViewerCount();
-    }
 
-    function showControllerVideo() {
-      if (!currentControllerId) return;
-      const peer = peers.get(currentControllerId);
-      if (peer && peer.stream) {
-        remoteVideo.srcObject = peer.stream;
-        placeholder.classList.add('hidden');
+      if (peers.size === 0) {
+        placeholder.classList.remove('hidden');
       }
     }
 
@@ -406,7 +475,6 @@
       try {
         await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
         peer.remoteDescSet = true;
-        // Flush queued ICE candidates
         for (const candidate of peer.iceCandidateQueue) {
           await peer.pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
         }
@@ -436,31 +504,12 @@
       viewerCountEl.textContent = count > 0 ? `${count} viewer${count !== 1 ? 's' : ''}` : '';
     }
 
-    // --- Viewer list ---
-    function updateViewerList(viewers) {
-      if (!viewers || viewers.length === 0) {
-        viewerListEl.classList.add('hidden');
-        return;
-      }
-      viewerListEl.classList.remove('hidden');
-      viewerListItems.innerHTML = '';
-      for (const v of viewers) {
-        const li = document.createElement('li');
-        const dot = document.createElement('span');
-        dot.className = 'dot ' + (v.isDriver ? 'driver' : 'spectator');
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = v.name;
-        const tag = document.createElement('span');
-        tag.className = 'role-tag';
-        tag.textContent = v.isDriver ? 'Driver' : 'Spectator';
-        li.appendChild(dot);
-        li.appendChild(nameSpan);
-        li.appendChild(tag);
-        viewerListItems.appendChild(li);
-      }
+    // --- Status helpers ---
+    function showSleeping(show) {
+      sleepingFace.style.display = show ? 'inline-block' : 'none';
+      connectingSpinner.classList.toggle('hidden', show);
     }
 
-    // --- Status helpers ---
     function setStatus(text, state) {
       statusText.textContent = text;
       statusDot.className = 'status-dot ' + (state || '');
@@ -487,7 +536,8 @@
 
         if (msg.type === 'claimed') {
           setStatus('Waiting for viewers...', 'waiting');
-          placeholderText.textContent = 'Waiting for a driver...';
+          placeholderText.textContent = '';
+          showSleeping(true);
           startCamera();
           requestWakeLock();
         }
@@ -499,24 +549,25 @@
 
         if (msg.type === 'peer-joined') {
           setStatus(msg.isController ? 'Driver connected' : 'Viewer connected', 'online');
-          createPeerOffer(msg.peerId, msg.isController);
+          createPeerOffer(msg.peerId, msg.isController, msg.name);
         }
 
         if (msg.type === 'peer-left') {
           closePeer(msg.peerId);
           if (peers.size === 0) {
             setStatus('Waiting for viewers...', 'waiting');
-            placeholderText.textContent = 'Waiting for a driver...';
+            placeholderText.textContent = '';
+            showSleeping(true);
           }
-        }
-
-        if (msg.type === 'viewer-list') {
-          updateViewerList(msg.viewers);
         }
 
         if (msg.type === 'controller-changed') {
           currentControllerId = msg.peerId;
-          showControllerVideo();
+          // Update the isController flag on peers
+          for (const [pid, p] of peers) {
+            p.isController = (pid === msg.peerId);
+          }
+          layoutVideos();
           setStatus('Driver changed', 'online');
         }
 
@@ -526,11 +577,11 @@
       };
 
       ws.onclose = () => {
-        // Close all peer connections
         for (const [peerId] of peers) closePeer(peerId);
         currentControllerId = null;
         setStatus('Disconnected — reconnecting...', '');
-        placeholderText.textContent = 'Connection lost. Reconnecting...';
+        placeholderText.textContent = 'Reconnecting...';
+        showSleeping(false);
         placeholder.classList.remove('hidden');
         reconnectTimer = setTimeout(connect, 2000);
       };

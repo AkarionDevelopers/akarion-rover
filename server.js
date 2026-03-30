@@ -138,11 +138,12 @@ wss.on("connection", (ws) => {
         console.log("Rover tablet connected");
 
         // Tell rover about all existing viewers and send current list
-        for (const [viewerId] of viewers) {
+        for (const [viewerId, v] of viewers) {
           send(currentRover, {
             type: "peer-joined",
             peerId: viewerId,
             isController: viewerId === controllerId,
+            name: v.name,
           });
         }
         return;
@@ -180,6 +181,7 @@ wss.on("connection", (ws) => {
             type: "peer-joined",
             peerId: id,
             isController: id === controllerId,
+            name,
           });
         }
 
@@ -224,12 +226,14 @@ wss.on("connection", (ws) => {
     // Viewer requests a fresh WebRTC connection
     if (msg.type === "retry-video" && role === "viewer") {
       if (currentRover) {
+        const v = viewers.get(id);
         send(currentRover, { type: "peer-left", peerId: id });
         setTimeout(() => {
           send(currentRover, {
             type: "peer-joined",
             peerId: id,
             isController: id === controllerId,
+            name: v ? v.name : "Unknown",
           });
         }, 500);
       }
