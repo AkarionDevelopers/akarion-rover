@@ -98,6 +98,32 @@
     }
     .role-badge.hidden { display: none; }
 
+    /* Give control button */
+    .give-control-btn {
+      position: fixed;
+      top: 44px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 5px 14px;
+      border-radius: 16px;
+      border: 1.5px solid rgba(255,255,255,0.15);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: rgba(255,255,255,0.7);
+      font-size: 0.7rem;
+      cursor: pointer;
+      z-index: 20;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .give-control-btn:hover {
+      background: rgba(233,69,96,0.3);
+      border-color: rgba(233,69,96,0.5);
+      color: #fff;
+    }
+    .give-control-btn.hidden { display: none; }
+
     /* Viewer list */
     .viewer-list {
       position: fixed;
@@ -319,6 +345,7 @@
   </div>
 
   <div class="role-badge hidden" id="role-badge"></div>
+  <button class="give-control-btn hidden" id="give-control-btn">Give Control</button>
 
   <div class="viewer-list hidden" id="viewer-list">
     <div class="viewer-list-title">Viewers</div>
@@ -349,6 +376,7 @@
     const spectatorBanner = document.getElementById('spectator-banner');
     const spectatorTitle = document.getElementById('spectator-title');
     const roleBadge = document.getElementById('role-badge');
+    const giveControlBtn = document.getElementById('give-control-btn');
     const viewerListEl = document.getElementById('viewer-list');
     const viewerListItems = document.getElementById('viewer-list-items');
     const muteBtn = document.getElementById('mute-btn');
@@ -357,6 +385,13 @@
     const remoteVideo = document.getElementById('remote-video');
     const selfVideo = document.getElementById('self-video');
     const videoPlaceholder = document.getElementById('video-placeholder');
+
+    let hasSpectators = false;
+
+    giveControlBtn.addEventListener('click', () => {
+      if (!isController) return;
+      wsSend({ type: 'release-control' });
+    });
 
     let ws = null;
     let isController = false;
@@ -395,16 +430,35 @@
       if (e.key === 'Enter') submitName();
     });
 
-    // Restore saved name
+    // Auto-connect if name was saved
     const savedName = localStorage.getItem('morty-rover-name');
-    if (savedName) nameInput.value = savedName;
+    if (savedName) {
+      playerName = savedName;
+      nameForm.style.display = 'none';
+      connectSpinner.classList.remove('hidden');
+      connect();
+    } else {
+      nameInput.focus();
+    }
+
+    function updateGiveControlBtn() {
+      if (isController && hasSpectators) {
+        giveControlBtn.classList.remove('hidden');
+      } else {
+        giveControlBtn.classList.add('hidden');
+      }
+    }
 
     // --- Viewer list ---
     function updateViewerList(viewers) {
       if (!viewers || viewers.length === 0) {
         viewerListEl.classList.add('hidden');
+        hasSpectators = false;
+        updateGiveControlBtn();
         return;
       }
+      hasSpectators = viewers.some(v => !v.isDriver);
+      updateGiveControlBtn();
       viewerListEl.classList.remove('hidden');
       viewerListItems.innerHTML = '';
       for (const v of viewers) {
@@ -431,6 +485,7 @@
       statusEl.textContent = 'You have control';
       roleBadge.textContent = 'Driver';
       roleBadge.className = 'role-badge driver';
+      updateGiveControlBtn();
     }
 
     function setSpectatorMode(reason) {
@@ -443,6 +498,7 @@
       connectScreen.classList.add('hidden');
       roleBadge.textContent = 'Spectator';
       roleBadge.className = 'role-badge spectator';
+      updateGiveControlBtn();
     }
 
     let isMuted = true;
@@ -637,6 +693,10 @@
 
         if (msg.type === 'promoted') {
           setControllerMode();
+          const utterance = new SpeechSynthesisUtterance('You are the driver now');
+          utterance.rate = 1;
+          utterance.pitch = 1;
+          speechSynthesis.speak(utterance);
         }
 
         if (msg.type === 'kicked') {

@@ -201,6 +201,26 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Driver voluntarily releases control
+    if (msg.type === "release-control" && role === "viewer" && id === controllerId) {
+      fireCommand("stop");
+      fireCommand("stop");
+      // Find a spectator to promote
+      let promoted = false;
+      for (const [vid] of viewers) {
+        if (vid !== id) {
+          promoteViewer(vid);
+          promoted = true;
+          break;
+        }
+      }
+      if (!promoted) {
+        // No one to give control to
+        broadcastViewerList();
+      }
+      return;
+    }
+
     // Viewer requests a fresh WebRTC connection
     if (msg.type === "retry-video" && role === "viewer") {
       if (currentRover) {
