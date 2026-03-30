@@ -29,7 +29,7 @@ const wss = new WebSocketServer({ server });
 let currentRover = null;
 let controllerId = null;
 let lastCommandTime = 0;
-const viewers = new Map(); // id -> ws
+const viewers = new Map(); // id -> { ws, name }
 let nextId = 1;
 
 function fireCommand(argument) {
@@ -51,10 +51,20 @@ function send(ws, msg) {
   }
 }
 
+function broadcastViewerList() {
+  const list = [];
+  for (const [id, v] of viewers) {
+    list.push({ name: v.name, isDriver: id === controllerId });
+  }
+  const msg = { type: "viewer-list", viewers: list };
+  for (const [, v] of viewers) send(v.ws, msg);
+  if (currentRover) send(currentRover, msg);
+}
+
 function promoteViewer(newId) {
   const oldId = controllerId;
-  const oldWs = viewers.get(oldId);
-  const newWs = viewers.get(newId);
+  const oldV = viewers.get(oldId);
+  const newV = viewers.get(newId);
 
   fireCommand("stop");
   fireCommand("stop");
@@ -62,11 +72,12 @@ function promoteViewer(newId) {
   controllerId = newId;
   lastCommandTime = Date.now();
 
-  if (oldWs) send(oldWs, { type: "kicked" });
-  if (newWs) send(newWs, { type: "promoted" });
+  if (oldV) send(oldV.ws, { type: "kicked" });
+  if (newV) send(newV.ws, { type: "promoted" });
   if (currentRover) send(currentRover, { type: "controller-changed", peerId: newId });
 
   console.log(`Controller changed: ${oldId} -> ${newId}`);
+  broadcastViewerList();
 }
 
 function promoteNextSpectator() {
@@ -126,7 +137,7 @@ wss.on("connection", (ws) => {
         send(ws, { type: "claimed" });
         console.log("Rover tablet connected");
 
-        // Tell rover about all existing viewers
+        // Tell rover about all existing viewers and send current list
         for (const [viewerId] of viewers) {
           send(currentRover, {
             type: "peer-joined",
@@ -138,28 +149,29 @@ wss.on("connection", (ws) => {
       }
 
       if (msg.role === "controller") {
+        const name = (msg.name || "Anonymous").slice(0, 30);
         role = "viewer";
-        viewers.set(id, ws);
+        viewers.set(id, { ws, name });
 
         if (!controllerId) {
           controllerId = id;
           lastCommandTime = Date.now();
           send(ws, { type: "claimed", roverOnline: currentRover !== null });
-          console.log(`Controller ${id} connected`);
+          console.log(`Controller ${id} (${name}) connected`);
         } else if (isControllerIdle()) {
           // Kick idle controller, give control to new viewer
-          const oldWs = viewers.get(controllerId);
+          const oldV = viewers.get(controllerId);
           fireCommand("stop");
           fireCommand("stop");
-          if (oldWs) send(oldWs, { type: "kicked" });
+          if (oldV) send(oldV.ws, { type: "kicked" });
           if (currentRover) send(currentRover, { type: "controller-changed", peerId: id });
           controllerId = id;
           lastCommandTime = Date.now();
           send(ws, { type: "claimed", roverOnline: currentRover !== null });
-          console.log(`Controller ${id} took over from idle controller`);
+          console.log(`Controller ${id} (${name}) took over from idle controller`);
         } else {
           send(ws, { type: "watching", roverOnline: currentRover !== null });
-          console.log(`Spectator ${id} connected`);
+          console.log(`Spectator ${id} (${name}) connected`);
         }
 
         // Tell rover about new peer
@@ -170,6 +182,8 @@ wss.on("connection", (ws) => {
             isController: id === controllerId,
           });
         }
+
+        broadcastViewerList();
         return;
       }
 
@@ -197,11 +211,11 @@ wss.on("connection", (ws) => {
 
     // Signaling from rover -> viewer (route by peerId)
     if (SIGNALING_TYPES.has(msg.type) && role === "rover") {
-      const targetWs = viewers.get(msg.peerId);
-      if (targetWs) {
+      const target = viewers.get(msg.peerId);
+      if (target) {
         const fwd = { ...msg };
         delete fwd.peerId;
-        send(targetWs, fwd);
+        send(target.ws, fwd);
       }
       return;
     }
@@ -211,8 +225,8 @@ wss.on("connection", (ws) => {
     if (role === "rover") {
       currentRover = null;
       console.log("Rover tablet disconnected");
-      for (const [, vws] of viewers) {
-        send(vws, { type: "rover-offline" });
+      for (const [, v] of viewers) {
+        send(v.ws, { type: "rover-offline" });
       }
     } else if (role === "viewer") {
       viewers.delete(id);
@@ -228,6 +242,7 @@ wss.on("connection", (ws) => {
       } else {
         console.log(`Spectator ${id} disconnected`);
       }
+      broadcastViewerList();
     }
   });
 

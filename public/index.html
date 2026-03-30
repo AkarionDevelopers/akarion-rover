@@ -98,6 +98,56 @@
     }
     .role-badge.hidden { display: none; }
 
+    /* Viewer list */
+    .viewer-list {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 8px 12px;
+      z-index: 10;
+      min-width: 120px;
+      max-width: 200px;
+    }
+    .viewer-list.hidden { display: none; }
+    .viewer-list-title {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: rgba(255,255,255,0.35);
+      margin-bottom: 6px;
+    }
+    .viewer-list ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .viewer-list li {
+      font-size: 0.75rem;
+      color: rgba(255,255,255,0.7);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .viewer-list .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .viewer-list .dot.driver { background: #4ecca3; }
+    .viewer-list .dot.spectator { background: #e94560; }
+    .viewer-list .role-tag {
+      font-size: 0.6rem;
+      color: rgba(255,255,255,0.35);
+      margin-left: auto;
+    }
+
     /* Spectator banner */
     .spectator-banner {
       display: none;
@@ -166,7 +216,7 @@
     .btn-left  { grid-area: left; }
     .btn-right { grid-area: right; }
 
-    /* Connecting overlay */
+    /* Name + connect screen */
     #connect-screen {
       position: fixed;
       inset: 0;
@@ -182,6 +232,34 @@
     #connect-screen.hidden { opacity: 0; pointer-events: none; }
     #connect-screen h2 { color: #e94560; font-size: 1.4rem; }
     #connect-screen p { color: #888; font-size: 0.95rem; }
+
+    .name-form {
+      display: flex;
+      gap: 8px;
+    }
+    .name-form input {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1.5px solid #333;
+      background: #16213e;
+      color: #eee;
+      font-size: 0.95rem;
+      outline: none;
+      width: 180px;
+    }
+    .name-form input:focus { border-color: #e94560; }
+    .name-form button {
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: none;
+      background: #e94560;
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .name-form button:hover { background: #d63a54; }
+
     .spinner {
       width: 40px; height: 40px;
       border: 4px solid #333;
@@ -189,14 +267,19 @@
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
+    .spinner.hidden { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <div id="connect-screen">
-    <div class="spinner"></div>
     <h2>Morty Rover</h2>
-    <p id="connect-text">Connecting...</p>
+    <p>Enter your name to join</p>
+    <div class="name-form" id="name-form">
+      <input type="text" id="name-input" placeholder="Your name" maxlength="30" autocomplete="off">
+      <button id="join-btn">Join</button>
+    </div>
+    <div class="spinner hidden" id="connect-spinner"></div>
   </div>
 
   <div class="video-placeholder" id="video-placeholder">Rover camera offline</div>
@@ -209,6 +292,11 @@
   </div>
 
   <div class="role-badge hidden" id="role-badge"></div>
+
+  <div class="viewer-list hidden" id="viewer-list">
+    <div class="viewer-list-title">Viewers</div>
+    <ul id="viewer-list-items"></ul>
+  </div>
 
   <div class="spectator-banner" id="spectator-banner">
     <div class="title" id="spectator-title">Someone else is controlling the rover</div>
@@ -225,10 +313,15 @@
   <script>
     const statusEl = document.getElementById('status');
     const connectScreen = document.getElementById('connect-screen');
-    const connectText = document.getElementById('connect-text');
+    const connectSpinner = document.getElementById('connect-spinner');
+    const nameForm = document.getElementById('name-form');
+    const nameInput = document.getElementById('name-input');
+    const joinBtn = document.getElementById('join-btn');
     const spectatorBanner = document.getElementById('spectator-banner');
     const spectatorTitle = document.getElementById('spectator-title');
     const roleBadge = document.getElementById('role-badge');
+    const viewerListEl = document.getElementById('viewer-list');
+    const viewerListItems = document.getElementById('viewer-list-items');
     const dpad = document.getElementById('dpad');
     const buttons = document.querySelectorAll('.dpad button');
     const remoteVideo = document.getElementById('remote-video');
@@ -240,6 +333,7 @@
     let reconnectTimer = null;
     let pc = null;
     let localStream = null;
+    let playerName = '';
 
     const pressed = new Set();
     let currentDirection = 'stop';
@@ -254,6 +348,50 @@
         { urls: 'stun:stun1.l.google.com:19302' },
       ]
     };
+
+    // --- Name input ---
+    function submitName() {
+      const name = nameInput.value.trim();
+      if (!name) { nameInput.focus(); return; }
+      playerName = name;
+      localStorage.setItem('morty-rover-name', name);
+      nameForm.style.display = 'none';
+      connectSpinner.classList.remove('hidden');
+      connect();
+    }
+
+    joinBtn.addEventListener('click', submitName);
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitName();
+    });
+
+    // Restore saved name
+    const savedName = localStorage.getItem('morty-rover-name');
+    if (savedName) nameInput.value = savedName;
+
+    // --- Viewer list ---
+    function updateViewerList(viewers) {
+      if (!viewers || viewers.length === 0) {
+        viewerListEl.classList.add('hidden');
+        return;
+      }
+      viewerListEl.classList.remove('hidden');
+      viewerListItems.innerHTML = '';
+      for (const v of viewers) {
+        const li = document.createElement('li');
+        const dot = document.createElement('span');
+        dot.className = 'dot ' + (v.isDriver ? 'driver' : 'spectator');
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = v.name;
+        const tag = document.createElement('span');
+        tag.className = 'role-tag';
+        tag.textContent = v.isDriver ? 'Driver' : 'Spectator';
+        li.appendChild(dot);
+        li.appendChild(nameSpan);
+        li.appendChild(tag);
+        viewerListItems.appendChild(li);
+      }
+    }
 
     function setControllerMode() {
       isController = true;
@@ -355,7 +493,7 @@
 
       ws.onopen = () => {
         clearTimeout(reconnectTimer);
-        wsSend({ type: 'join', role: 'controller' });
+        wsSend({ type: 'join', role: 'controller', name: playerName });
       };
 
       ws.onmessage = (e) => {
@@ -385,6 +523,10 @@
           closePeerConnection();
         }
 
+        if (msg.type === 'viewer-list') {
+          updateViewerList(msg.viewers);
+        }
+
         // WebRTC signaling
         if (msg.type === 'offer') handleOffer(msg);
         if (msg.type === 'answer') handleAnswer(msg);
@@ -402,8 +544,12 @@
         closePeerConnection();
         dpad.classList.add('hidden');
         spectatorBanner.classList.remove('active');
+        viewerListEl.classList.add('hidden');
+        roleBadge.className = 'role-badge hidden';
+        // Reconnect without showing name screen again
         connectScreen.classList.remove('hidden');
-        connectText.textContent = 'Reconnecting...';
+        nameForm.style.display = 'none';
+        connectSpinner.classList.remove('hidden');
         reconnectTimer = setTimeout(connect, 2000);
       };
 
@@ -488,8 +634,6 @@
       pressed.clear();
       updateDirection();
     });
-
-    connect();
   </script>
 </body>
 </html>

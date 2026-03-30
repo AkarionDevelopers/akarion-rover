@@ -106,6 +106,56 @@
       font-size: 0.75rem;
       color: #666;
     }
+
+    /* Viewer list */
+    .viewer-list {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 8px 12px;
+      z-index: 10;
+      min-width: 120px;
+      max-width: 200px;
+    }
+    .viewer-list.hidden { display: none; }
+    .viewer-list-title {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: rgba(255,255,255,0.35);
+      margin-bottom: 6px;
+    }
+    .viewer-list ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .viewer-list li {
+      font-size: 0.75rem;
+      color: rgba(255,255,255,0.7);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .viewer-list .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .viewer-list .dot.driver { background: #4ecca3; }
+    .viewer-list .dot.spectator { background: #e94560; }
+    .viewer-list .role-tag {
+      font-size: 0.6rem;
+      color: rgba(255,255,255,0.35);
+      margin-left: auto;
+    }
   </style>
 </head>
 <body>
@@ -124,6 +174,11 @@
     <span class="viewer-count" id="viewer-count"></span>
   </div>
 
+  <div class="viewer-list hidden" id="viewer-list">
+    <div class="viewer-list-title">Viewers</div>
+    <ul id="viewer-list-items"></ul>
+  </div>
+
   <script>
     const remoteVideo = document.getElementById('remote-video');
     const selfVideo = document.getElementById('self-video');
@@ -132,6 +187,9 @@
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
     const viewerCountEl = document.getElementById('viewer-count');
+
+    const viewerListEl = document.getElementById('viewer-list');
+    const viewerListItems = document.getElementById('viewer-list-items');
 
     let ws = null;
     let localStream = null;
@@ -253,6 +311,30 @@
       viewerCountEl.textContent = count > 0 ? `${count} viewer${count !== 1 ? 's' : ''}` : '';
     }
 
+    // --- Viewer list ---
+    function updateViewerList(viewers) {
+      if (!viewers || viewers.length === 0) {
+        viewerListEl.classList.add('hidden');
+        return;
+      }
+      viewerListEl.classList.remove('hidden');
+      viewerListItems.innerHTML = '';
+      for (const v of viewers) {
+        const li = document.createElement('li');
+        const dot = document.createElement('span');
+        dot.className = 'dot ' + (v.isDriver ? 'driver' : 'spectator');
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = v.name;
+        const tag = document.createElement('span');
+        tag.className = 'role-tag';
+        tag.textContent = v.isDriver ? 'Driver' : 'Spectator';
+        li.appendChild(dot);
+        li.appendChild(nameSpan);
+        li.appendChild(tag);
+        viewerListItems.appendChild(li);
+      }
+    }
+
     // --- Status helpers ---
     function setStatus(text, state) {
       statusText.textContent = text;
@@ -301,6 +383,10 @@
             setStatus('Waiting for viewers...', 'waiting');
             placeholderText.textContent = 'Waiting for a driver...';
           }
+        }
+
+        if (msg.type === 'viewer-list') {
+          updateViewerList(msg.viewers);
         }
 
         if (msg.type === 'controller-changed') {
