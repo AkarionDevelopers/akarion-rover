@@ -188,6 +188,25 @@
       color: #666;
     }
 
+    /* Tap-to-start overlay (Safari requires user gesture for camera) */
+    .tap-to-start {
+      position: fixed;
+      inset: 0;
+      background: #1a1a2e;
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .tap-to-start.hidden { display: none; }
+    .tap-to-start .icon { font-size: 4rem; }
+    .tap-to-start h2 { color: #e94560; font-size: 1.4rem; }
+    .tap-to-start p { color: #888; font-size: 0.9rem; }
+
     /* Mute button */
     .mute-btn {
       position: fixed;
@@ -217,6 +236,12 @@
   </style>
 </head>
 <body>
+  <div class="tap-to-start" id="tap-to-start">
+    <div class="icon">&#128247;</div>
+    <h2>Morty Rover</h2>
+    <p>Tap to start camera</p>
+  </div>
+
   <div class="placeholder" id="placeholder">
     <div class="sleeping-face" id="sleeping-face" style="position:relative;display:inline-block">
       <span>&#128564;</span>
@@ -254,10 +279,13 @@
     const viewerCountEl = document.getElementById('viewer-count');
     const muteBtn = document.getElementById('mute-btn');
 
+    const tapToStart = document.getElementById('tap-to-start');
+
     let ws = null;
     let localStream = null;
     let reconnectTimer = null;
     let wakeLock = null;
+    let cameraReady = false;
 
     // Multiple peer connections, keyed by peerId
     // { pc, stream, isController, name, videoEl, tileEl, retryCount, iceCandidateQueue, remoteDescSet, timeoutId }
@@ -310,10 +338,21 @@
         selfVideo.srcObject = localStream;
         localStream.getAudioTracks().forEach(t => t.enabled = false);
         muteBtn.classList.remove('hidden');
+        cameraReady = true;
       } catch (err) {
         console.warn('Camera/mic not available:', err);
+        // Still allow connecting even if camera fails
+        cameraReady = true;
       }
     }
+
+    // Safari requires a user gesture before getUserMedia works.
+    // Start camera on tap, then connect WebSocket.
+    tapToStart.addEventListener('click', async () => {
+      tapToStart.classList.add('hidden');
+      await startCamera();
+      connect();
+    });
 
     // --- Video layout ---
     function layoutVideos() {
@@ -538,7 +577,6 @@
           setStatus('Waiting for viewers...', 'waiting');
           placeholderText.textContent = '';
           showSleeping(true);
-          startCamera();
           requestWakeLock();
         }
 
@@ -589,7 +627,7 @@
       ws.onerror = () => ws.close();
     }
 
-    connect();
+    // connect() is called after tap-to-start (required for Safari camera access)
   </script>
 </body>
 </html>
