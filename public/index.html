@@ -9,31 +9,112 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #1a1a2e;
+      background: #000;
       color: #eee;
       height: 100dvh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
       overflow: hidden;
       -webkit-user-select: none;
       user-select: none;
     }
 
-    h1 {
-      font-size: 1.4rem;
-      margin-top: 0.8rem;
-      margin-bottom: 0.2rem;
-      color: #e94560;
+    /* Fullscreen rover camera */
+    #remote-video {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 0;
     }
 
-    .status {
-      font-size: 0.8rem;
-      margin-bottom: 0.8rem;
-      color: #888;
+    .video-placeholder {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #555;
+      font-size: 0.9rem;
+      background: #1a1a2e;
+      z-index: 0;
     }
-    .status.connected { color: #4ecca3; }
-    .status.busy { color: #e94560; }
+    .video-placeholder.hidden { display: none; }
+
+    /* Self-view */
+    #self-video {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      width: 90px;
+      height: 68px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 2px solid rgba(255,255,255,0.15);
+      z-index: 10;
+    }
+
+    /* Status bar */
+    .status-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 10px 14px;
+      background: linear-gradient(rgba(0,0,0,0.6), transparent);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .status-bar .label { color: #e94560; font-size: 0.85rem; font-weight: 600; }
+    .status-bar .info { color: rgba(255,255,255,0.6); font-size: 0.75rem; }
+
+    /* D-pad overlay */
+    .dpad {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: grid;
+      grid-template-areas:
+        ". up ."
+        "left . right"
+        ". down .";
+      gap: 4px;
+      z-index: 10;
+      opacity: 0.5;
+      transition: opacity 0.2s;
+    }
+    .dpad:hover, .dpad:active { opacity: 0.85; }
+
+    .dpad button {
+      width: 52px;
+      height: 52px;
+      border: 1.5px solid rgba(255,255,255,0.2);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.4);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: rgba(255,255,255,0.8);
+      font-size: 1.2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.1s, border-color 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .dpad button:active, .dpad button.active {
+      background: rgba(233,69,96,0.7);
+      border-color: rgba(233,69,96,0.9);
+      opacity: 1;
+    }
+
+    .btn-up    { grid-area: up; }
+    .btn-down  { grid-area: down; }
+    .btn-left  { grid-area: left; }
+    .btn-right { grid-area: right; }
 
     /* Busy overlay */
     #busy-screen {
@@ -58,105 +139,6 @@
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Video area */
-    .video-container {
-      position: relative;
-      width: min(100%, 480px);
-      aspect-ratio: 4/3;
-      background: #111;
-      border-radius: 12px;
-      overflow: hidden;
-      margin-bottom: 0.8rem;
-    }
-
-    #remote-video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    .video-placeholder {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #555;
-      font-size: 0.9rem;
-    }
-
-    #self-video {
-      position: absolute;
-      bottom: 8px;
-      right: 8px;
-      width: 80px;
-      height: 60px;
-      border-radius: 8px;
-      object-fit: cover;
-      border: 2px solid #333;
-      z-index: 2;
-    }
-
-    /* D-pad */
-    .dpad {
-      display: grid;
-      grid-template-areas:
-        ". up ."
-        "left . right"
-        ". down .";
-      gap: 6px;
-      margin-bottom: 0.8rem;
-    }
-
-    .dpad button {
-      width: 64px;
-      height: 64px;
-      border: 2px solid #333;
-      border-radius: 14px;
-      background: #16213e;
-      color: #eee;
-      font-size: 1.6rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: background 0.1s, border-color 0.1s;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .dpad button:active, .dpad button.active {
-      background: #e94560;
-      border-color: #e94560;
-    }
-
-    .btn-up    { grid-area: up; }
-    .btn-down  { grid-area: down; }
-    .btn-left  { grid-area: left; }
-    .btn-right { grid-area: right; }
-
-    /* Speed slider */
-    .speed-control {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 0.5rem;
-    }
-    .speed-control label { font-size: 0.8rem; color: #888; }
-    .speed-control input[type="range"] {
-      width: 160px;
-      accent-color: #e94560;
-    }
-    .speed-control .speed-val {
-      font-size: 0.8rem;
-      color: #4ecca3;
-      min-width: 2ch;
-      text-align: right;
-    }
-
-    .hint {
-      font-size: 0.7rem;
-      color: #555;
-    }
   </style>
 </head>
 <body>
@@ -167,13 +149,13 @@
     <p>Waiting for them to finish...</p>
   </div>
 
-  <h1>Morty Rover</h1>
-  <div class="status" id="status">Connecting...</div>
+  <div class="video-placeholder" id="video-placeholder">Rover camera offline</div>
+  <video id="remote-video" autoplay playsinline></video>
+  <video id="self-video" autoplay playsinline muted></video>
 
-  <div class="video-container">
-    <div class="video-placeholder" id="video-placeholder">Rover camera offline</div>
-    <video id="remote-video" autoplay playsinline></video>
-    <video id="self-video" autoplay playsinline muted></video>
+  <div class="status-bar">
+    <span class="label">Morty Rover</span>
+    <span class="info" id="status">Connecting...</span>
   </div>
 
   <div class="dpad">
@@ -183,19 +165,9 @@
     <button class="btn-down" data-dir="reverse">&#9660;</button>
   </div>
 
-  <div class="speed-control">
-    <label>Speed</label>
-    <input type="range" id="speed" min="50" max="255" value="200">
-    <span class="speed-val" id="speed-val">200</span>
-  </div>
-
-  <p class="hint">Arrow keys or tap the buttons</p>
-
   <script>
     const statusEl = document.getElementById('status');
     const busyScreen = document.getElementById('busy-screen');
-    const speedSlider = document.getElementById('speed');
-    const speedVal = document.getElementById('speed-val');
     const buttons = document.querySelectorAll('.dpad button');
     const remoteVideo = document.getElementById('remote-video');
     const selfVideo = document.getElementById('self-video');
@@ -220,10 +192,6 @@
         { urls: 'stun:stun1.l.google.com:19302' },
       ]
     };
-
-    speedSlider.addEventListener('input', () => {
-      speedVal.textContent = speedSlider.value;
-    });
 
     // --- Camera ---
     async function startCamera() {
@@ -250,7 +218,7 @@
 
       pc.ontrack = (e) => {
         remoteVideo.srcObject = e.streams[0];
-        videoPlaceholder.style.display = 'none';
+        videoPlaceholder.classList.add('hidden');
       };
 
       pc.onicecandidate = (e) => {
@@ -268,7 +236,7 @@
         pc = null;
       }
       remoteVideo.srcObject = null;
-      videoPlaceholder.style.display = 'flex';
+      videoPlaceholder.classList.remove('hidden');
     }
 
     async function handleOffer(offer) {
@@ -312,25 +280,22 @@
           claimed = true;
           busyScreen.classList.remove('active');
           statusEl.textContent = msg.roverOnline
-            ? 'Connected — rover online'
-            : 'Connected — waiting for rover';
-          statusEl.className = 'status connected';
+            ? 'Rover online'
+            : 'Waiting for rover...';
           startCamera();
         }
 
         if (msg.type === 'busy') {
           claimed = false;
           busyScreen.classList.add('active');
-          statusEl.textContent = 'Rover is busy';
-          statusEl.className = 'status busy';
         }
 
         if (msg.type === 'rover-online') {
-          statusEl.textContent = 'Connected — rover online';
+          statusEl.textContent = 'Rover online';
         }
 
         if (msg.type === 'rover-offline') {
-          statusEl.textContent = 'Connected — rover camera offline';
+          statusEl.textContent = 'Rover camera offline';
           closePeerConnection();
         }
 
@@ -349,8 +314,7 @@
         pressed.clear();
         setDirection('stop');
         closePeerConnection();
-        statusEl.textContent = 'Disconnected — reconnecting...';
-        statusEl.className = 'status';
+        statusEl.textContent = 'Reconnecting...';
         reconnectTimer = setTimeout(connect, 2000);
       };
 
@@ -360,7 +324,7 @@
     // --- Motor commands ---
     function sendCommand(action) {
       if (!claimed) return;
-      wsSend({ type: 'command', action, speed: parseInt(speedSlider.value) });
+      wsSend({ type: 'command', action });
     }
 
     function setDirection(dir) {
