@@ -20,7 +20,7 @@ if (!TOKEN || !DEVICE_ID) {
 }
 
 const app = express();
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
